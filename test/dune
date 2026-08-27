@@ -1,0 +1,11 @@
+(tests
+ (names
+  test_siesta
+  test_props
+  test_dedup
+  test_gc
+  test_dedup_diff
+  test_plain
+  test_nav
+  test_builder_script)
+ (libraries siesta alcotest qcheck-core qcheck-alcotest))

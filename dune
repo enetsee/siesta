@@ -1,0 +1,4 @@
+(env
+ (dev
+  (flags
+   (:standard -w +a-48 -warn-error +a))))
