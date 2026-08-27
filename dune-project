@@ -4,11 +4,16 @@
 
 (generate_opam_files true)
 
+(source
+ (github enetsee/siesta))
+
 (authors "Michael Thomas <mthomas180@gmail.com>")
 
 (maintainers "Michael Thomas <mthomas180@gmail.com>")
 
 (license MIT)
+
+(documentation https://enetsee.github.io/siesta/)
 
 (package
  (name siesta)

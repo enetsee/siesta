@@ -9,6 +9,9 @@ license: "MIT"
 tags: [
   "cst" "syntax-tree" "hash-consing" "incremental-parsing" "red-green-tree"
 ]
+homepage: "https://github.com/enetsee/siesta"
+doc: "https://enetsee.github.io/siesta/"
+bug-reports: "https://github.com/enetsee/siesta/issues"
 depends: [
   "dune" {>= "3.22"}
   "ocaml" {>= "5.2"}
@@ -31,4 +34,5 @@ build: [
     "@doc" {with-doc}
   ]
 ]
+dev-repo: "git+https://github.com/enetsee/siesta.git"
 x-maintenance-intent: ["(latest)"]

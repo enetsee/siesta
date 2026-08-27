@@ -1,5 +1,8 @@
 # siesta
 
+[![CI](https://github.com/enetsee/siesta/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/enetsee/siesta/actions/workflows/ci.yml)
+[![Docs](https://github.com/enetsee/siesta/actions/workflows/docs.yml/badge.svg?branch=main)](https://github.com/enetsee/siesta/actions/workflows/docs.yml)
+
 A **language-independent concrete-syntax-tree (CST) library** for OCaml.
 
 `siesta` provides the immutable, lossless, hash-consed tree substrate that a
@@ -7,6 +10,8 @@ parser, editor, or refactoring tool builds on: the *red-green tree* design
 made popular by Roslyn and adopted by rust-analyzer's [rowan] / [cstree]. It
 knows nothing about any particular grammar: node and token *kinds* are plain
 integers you assign.
+
+[API documentation](https://enetsee.github.io/siesta/siesta/Siesta/index.html)
 
 [rowan]: https://github.com/rust-analyzer/rowan
 [cstree]: https://github.com/domenicquirl/cstree
