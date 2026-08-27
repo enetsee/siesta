@@ -13,7 +13,7 @@ homepage: "https://github.com/enetsee/siesta"
 doc: "https://enetsee.github.io/siesta/"
 bug-reports: "https://github.com/enetsee/siesta/issues"
 depends: [
-  "dune" {>= "3.22"}
+  "dune" {>= "3.20"}
   "ocaml" {>= "5.2"}
   "alcotest" {with-test}
   "qcheck-core" {with-test}
