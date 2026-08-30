@@ -36,13 +36,14 @@ and child =
    the life of the process. [clear] leaves it alone, so a tag is never reissued.
    Callers stashing a tag as an identity key depend on that.
 
-   Not thread-safe; siesta makes no concurrency claims. *)
-let tag_counter = ref 0
+   [incr] loses updates under domains, so two caches hand out the same tag and
+   [Green.equal] quietly answers true for unrelated nodes. Only an intern miss
+   gets this far, so a re-parse that mostly hits never touches it. *)
+let tag_counter = Atomic.make 0
 
-let fresh_tag () =
-  incr tag_counter;
-  !tag_counter
-;;
+(* [fetch_and_add] returns the previous value, so the [+ 1] keeps 1 as the first
+   tag handed out. *)
+let fresh_tag () = Atomic.fetch_and_add tag_counter 1 + 1
 
 (* ---- hashing ------------------------------------------------------------- *)
 

@@ -180,15 +180,21 @@ let test_wide_array () =
 (* -- hash distribution sanity ---------------------------------------------- *)
 
 (* A sanity check on the hash: the biggest bucket should stay within a small
-   constant factor of the median one. *)
+   constant factor of the median one.
+
+   The tokens are held until after the stats are read. Dropped, most of them get
+   collected before the measurement and it reports the shape of a mostly-empty
+   table: on OCaml 5.5 that came out as 1560 live of 10000, median bucket 0, and
+   the check then means nothing. *)
 let test_hash_distribution () =
   let t = Siesta.Dedup.token_create () in
   let n = 10_000 in
-  for i = 0 to n - 1 do
-    let _ = Siesta.Dedup.token_intern t ~kind:(i mod 100) ~text:(string_of_int i) in
-    ()
-  done;
+  let kept =
+    Array.init n (fun i ->
+      Siesta.Dedup.token_intern t ~kind:(i mod 100) ~text:(string_of_int i))
+  in
   let _, entries, _, _, median, biggest = Siesta.Dedup.token_stats t in
+  ignore (Sys.opaque_identity kept);
   Printf.printf
     "  hash distribution: entries=%d median=%d biggest=%d\n"
     entries

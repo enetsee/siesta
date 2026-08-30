@@ -50,7 +50,13 @@ let equal a b = a.offset = b.offset && Green.equal a.green b.green
 
 (* Build the children array on demand. Every later call gets the same array, so
    navigation is stable. Offsets come from their own left-to-right sweep,
-   because [Array.init] promises no evaluation order. *)
+   because [Array.init] promises no evaluation order.
+
+   This memo is why a cursor tree belongs to one domain. Two domains navigating
+   the same tree would each build an array and one write would win, so the
+   [parent <-> child] round-trip stops holding. No lock here: [of_root] is O(1),
+   so a second domain gets its own cursor tree over the same green root for the
+   price of a record. *)
 let materialize_children parent_cursor =
   let g = parent_cursor.green in
   let n = Green.num_children g in

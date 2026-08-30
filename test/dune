@@ -9,3 +9,13 @@
   test_nav
   test_builder_script)
  (libraries siesta alcotest qcheck-core qcheck-alcotest))
+
+; Domain tests need OCaml >= 5.5. Earlier runtimes segfault in ephe_mark when a
+; domain that allocated weak arrays terminates, which siesta's dedup tables hit
+; as a matter of course. Fixed upstream in 5.5.0 (ocaml/ocaml#14722).
+
+(test
+ (name test_multicore)
+ (enabled_if
+  (>= %{ocaml_version} 5.5.0))
+ (libraries siesta alcotest))

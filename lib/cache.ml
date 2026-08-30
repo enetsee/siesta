@@ -1,4 +1,4 @@
-(* Hash-cons cache, in two modes.
+(* Hash-cons cache, in three modes.
 
    [Hashconsed] dedups through [Dedup]'s weak tables, so a re-parse reuses green
    nodes of identical kind, children and payload, and "did this subtree change"
@@ -6,11 +6,21 @@
    keystroke wants.
 
    [Plain] is a bare tag counter, allocating on every intern. Sharing buys a
-   one-shot parse nothing, so it skips the hash and the bucket walk. *)
+   one-shot parse nothing, so it skips the hash and the bucket walk.
+
+   [Synchronized] is [Hashconsed] behind a mutex, for a cache shared between
+   domains. The lock spans the probe and the insert together, since interning is
+   one compound operation over a weak table. A separate constructor rather than
+   a flag, so the single-domain path pays nothing. *)
 
 type t =
   | Hashconsed of
       { tokens : Dedup.token_t
+      ; nodes : Dedup.node_t
+      }
+  | Synchronized of
+      { lock : Mutex.t
+      ; tokens : Dedup.token_t
       ; nodes : Dedup.node_t
       }
   | Plain
@@ -31,11 +41,21 @@ let create ?(capacity = default_capacity) () =
     { tokens = Dedup.token_create ~capacity (); nodes = Dedup.node_create ~capacity () }
 ;;
 
+let create_synchronized ?(capacity = default_capacity) () =
+  Synchronized
+    { lock = Mutex.create ()
+    ; tokens = Dedup.token_create ~capacity ()
+    ; nodes = Dedup.node_create ~capacity ()
+    }
+;;
+
 let create_plain () = Plain
 
 let hashcons_token (t : t) ~kind ~text : Dedup.token =
   match t with
   | Hashconsed { tokens; _ } -> Dedup.token_intern tokens ~kind ~text
+  | Synchronized { lock; tokens; _ } ->
+    Mutex.protect lock (fun () -> Dedup.token_intern tokens ~kind ~text)
   | Plain -> Dedup.{ tk_tag = fresh_tag (); tk_kind = kind; tk_text = text }
 ;;
 
@@ -44,6 +64,9 @@ let hashcons_node (t : t) ~kind ~text_len ~payload (children : Dedup.child array
   =
   match t with
   | Hashconsed { nodes; _ } -> Dedup.node_intern nodes ~kind ~text_len ~payload children
+  | Synchronized { lock; nodes; _ } ->
+    Mutex.protect lock (fun () ->
+      Dedup.node_intern nodes ~kind ~text_len ~payload children)
   | Plain ->
     Dedup.
       { nd_tag = fresh_tag ()
@@ -59,6 +82,10 @@ let clear (t : t) =
   | Hashconsed { tokens; nodes } ->
     Dedup.token_clear tokens;
     Dedup.node_clear nodes
+  | Synchronized { lock; tokens; nodes } ->
+    Mutex.protect lock (fun () ->
+      Dedup.token_clear tokens;
+      Dedup.node_clear nodes)
   | Plain -> ()
 ;;
 
@@ -92,11 +119,15 @@ let empty_stats =
 let token_stats (t : t) =
   match t with
   | Hashconsed { tokens; _ } -> stats_of_tuple (Dedup.token_stats tokens)
+  | Synchronized { lock; tokens; _ } ->
+    Mutex.protect lock (fun () -> stats_of_tuple (Dedup.token_stats tokens))
   | Plain -> empty_stats
 ;;
 
 let node_stats (t : t) =
   match t with
   | Hashconsed { nodes; _ } -> stats_of_tuple (Dedup.node_stats nodes)
+  | Synchronized { lock; nodes; _ } ->
+    Mutex.protect lock (fun () -> stats_of_tuple (Dedup.node_stats nodes))
   | Plain -> empty_stats
 ;;

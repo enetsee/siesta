@@ -6,6 +6,7 @@
 type t
 
 val create : ?capacity:int -> unit -> t
+val create_synchronized : ?capacity:int -> unit -> t
 val create_plain : unit -> t
 
 (** Not re-exported by {!Siesta.Cache}. Gives a token its identity: in

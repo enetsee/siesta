@@ -11,7 +11,8 @@
    Corpora come from a fixed seed, so runs are comparable and both cache modes
    see byte-identical inputs.
 
-   Run: dune exec bench/bench.exe *)
+   Run: dune exec bench/bench.exe
+        dune exec bench/bench.exe -- --scale   (adds the scale sweep) *)
 
 open Siesta
 
@@ -267,9 +268,137 @@ let bench_churn () =
     modes
 ;;
 
+(* -- scale sweep ----------------------------------------------------------- *)
+
+(* The per-entry columns are the result: they should hold flat as the table
+   grows, and their value at any one size says little.
+
+   [ns/intern] climbing means the bucket walk is lengthening, so the hash is not
+   spreading or the resize is falling behind the load factor. [B/intern]
+   climbing means per-entry overhead grows with occupancy.
+
+   Unique literals throughout, so nothing dedups away and [entries] tracks the
+   work done. Hashconsed only; Plain has no table and so no scaling question.
+
+   One timed run per size rather than the median used elsewhere: at the top size
+   the repeats cost more than the precision buys. *)
+let bench_scale () =
+  let sizes = [ 10_000; 40_000; 160_000; 640_000 ] in
+  Printf.printf "\n## scale sweep (unique literals, Hashconsed)\n";
+  Printf.printf
+    "%9s %10s %10s %9s %10s %9s %9s %8s %8s\n"
+    "roots"
+    "nodes"
+    "tokens"
+    "time(ms)"
+    "ns/intern"
+    "B/intern"
+    "buckets"
+    "median"
+    "biggest";
+  List.iter
+    (fun n ->
+       let shapes = corpus ~n ~max_depth:8 ~lit:(make_unique_lit ()) in
+       (* [shapes] is allocated and reachable before the baseline, so it drops
+          out of the delta and only the green tree is measured. *)
+       Gc.full_major ();
+       let l0 = Gc.((stat ()).live_words) in
+       let t0 = Sys.time () in
+       let cache, roots = build_corpus hashconsed shapes in
+       let dt = Sys.time () -. t0 in
+       Gc.full_major ();
+       let l1 = Gc.((stat ()).live_words) in
+       let ns = Cache.node_stats cache
+       and ts = Cache.token_stats cache in
+       let interns = ns.Cache.entries + ts.Cache.entries in
+       Printf.printf
+         "%9d %10d %10d %9.1f %10.1f %9.1f %9d %8d %8d\n"
+         n
+         ns.Cache.entries
+         ts.Cache.entries
+         (dt *. 1000.)
+         (dt *. 1e9 /. float_of_int interns)
+         (float_of_int ((l1 - l0) * word_bytes) /. float_of_int interns)
+         ns.Cache.table_length
+         ns.Cache.median_bucket
+         ns.Cache.biggest_bucket;
+       (* Hold both past the stats read, or the GC reaps the tree mid-row and
+          the whole table reads as empty. *)
+       ignore (Sys.opaque_identity roots);
+       ignore (Sys.opaque_identity shapes))
+    sizes
+;;
+
+(* -- re-parse through a warm cache ----------------------------------------- *)
+
+(* What a keystroke costs when the editor re-parses the whole file and the
+   previous tree is still alive.
+
+   [cold] is the first parse, every intern a miss. [warm] replays the identical
+   input, so every intern hits. [edit] changes one literal in the whole corpus,
+   missing on that token and the spine above it and hitting everywhere else.
+
+   Source bytes are the column to read: node counts do not map to file sizes by
+   eye. This times tree construction only, so it is a floor on a real re-parse,
+   which also lexes.
+
+   The previous roots stay alive across the later runs. Drop them and the weak
+   table reaps the entries, so [warm] measures another cold build. *)
+let bench_reparse () =
+  let edit_first_leaf shape =
+    let done_ = ref false in
+    let rec go s =
+      match s with
+      | Leaf (kind, t) when not !done_ ->
+        done_ := true;
+        Leaf (kind, t ^ "z")
+      | Leaf _ -> s
+      | Branch (kind, cs) -> Branch (kind, List.map go cs)
+    in
+    go shape
+  in
+  Printf.printf "\n## re-parse through a warm cache (32-literal vocab)\n";
+  Printf.printf
+    "%9s %11s %10s %10s %10s %10s\n"
+    "roots"
+    "source(KB)"
+    "nodes"
+    "cold(ms)"
+    "warm(ms)"
+    "edit(ms)";
+  List.iter
+    (fun n ->
+       let shapes = corpus ~n ~max_depth:8 ~lit:shared_lit in
+       let cache = Cache.create () in
+       let build cs = snd (build_corpus (fun () -> cache) cs) in
+       let t0 = Sys.time () in
+       let first = build shapes in
+       let cold = Sys.time () -. t0 in
+       let t1 = Sys.time () in
+       let again = build shapes in
+       let warm = Sys.time () -. t1 in
+       let edited = Array.copy shapes in
+       edited.(0) <- edit_first_leaf shapes.(0);
+       let t2 = Sys.time () in
+       let after = build edited in
+       let edit = Sys.time () -. t2 in
+       let bytes = Array.fold_left (fun acc r -> acc + Green.text_len r) 0 first in
+       Printf.printf
+         "%9d %11.1f %10d %10.2f %10.2f %10.2f\n"
+         n
+         (float_of_int bytes /. 1e3)
+         Cache.((node_stats cache).entries)
+         (cold *. 1000.)
+         (warm *. 1000.)
+         (edit *. 1000.);
+       ignore (Sys.opaque_identity (first, again, after)))
+    [ 2_000; 10_000; 50_000 ]
+;;
+
 (* -- entry point ----------------------------------------------------------- *)
 
 let () =
+  let scale = Array.exists (String.equal "--scale") Sys.argv in
   Printf.printf "Siesta Dedup/Cache baseline, %d-bit words\n" (word_bytes * 8);
   Printf.printf "alloc + foot are exact; time is median of 3 reps (CPU seconds, noisy).\n";
   let n = 20_000
@@ -280,5 +409,7 @@ let () =
     (corpus ~n ~max_depth ~lit:(make_unique_lit ()));
   bench_wide ();
   bench_deep ();
-  bench_churn ()
+  bench_churn ();
+  bench_reparse ();
+  if scale then bench_scale ()
 ;;

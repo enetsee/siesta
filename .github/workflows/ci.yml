@@ -12,8 +12,9 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        # Builder uses the stdlib Dynarray, which lands in 5.2
-        ocaml-compiler: ["5.2", "5.3", "5.4"]
+        # Builder uses the stdlib Dynarray, which lands in 5.2. 5.5 is here so
+        # the domain tests get a run; they are gated off below it, see test/dune.
+        ocaml-compiler: ["5.2", "5.3", "5.4", "5.5"]
 
     runs-on: ${{ matrix.os }}
 

@@ -73,14 +73,35 @@ end
 
 (** Hash-cons cache.
 
-    A cache is either two weak dedup tables, one for tokens and one for nodes
-    (Hashconsed mode), or just a monotonic tag counter (Plain mode). {!Builder}
-    and {!Syntax} share identical subtrees by physical equality only in
-    Hashconsed mode; Plain gives up the sharing to save the dedup work on a
-    one-shot parse.
+    A cache holds two weak dedup tables, one for tokens and one for nodes
+    (Hashconsed mode), or the same pair behind a mutex (Synchronized mode), or
+    nothing but the tag counter (Plain mode). {!Builder} and {!Syntax} share
+    identical subtrees by physical equality in the first two; Plain gives up the
+    sharing to save the dedup work on a one-shot parse.
 
     The public surface is just enough to allocate, clear, and inspect a cache;
-    the internal hashcons primitives stay private to the library. *)
+    the internal hashcons primitives stay private to the library.
+
+    {2 Domains}
+
+    Green values are immutable, so a {!Green.node} or {!Green.token} can be read
+    from any domain once built. Tags come from an atomic counter, so they stay
+    unique whichever domain hands them out.
+
+    Everything else belongs to one domain at a time: a cache from [create], a
+    {!Builder.t}, and a cursor tree from {!Syntax.of_root}.
+
+    All of this needs OCaml >= 5.5.0. Earlier runtimes segfault in [ephe_mark]
+    once a domain that allocated weak arrays terminates, which any Hashconsed
+    cache built inside a domain will hit. That is a runtime bug, fixed upstream
+    in 5.5.0; the library still builds and runs single-domain on 5.2.
+
+    Two ways to work in parallel. For read-only analysis, share the green root
+    and give each domain its own cursor tree: {!Syntax.of_root} is O(1), so that
+    costs a record per domain and needs no synchronisation. For building,
+    [create_plain] holds no tables and is safe to share, which suits parallel
+    one-shot parses; [create_synchronized] is for when domains must share
+    hash-cons identity. *)
 module Cache : sig
   type t = Cache.t
 
@@ -92,8 +113,19 @@ module Cache : sig
   (** Plain mode. Every intern allocates a fresh record, skipping the hash and
       the bucket walk. Worth it for a one-shot parse, where the tree is built
       once and then read. {!Green.equal} still works, since it compares tags,
-      but you lose sharing across trees. *)
+      but you lose sharing across trees.
+
+      Holds no tables, so it is safe to share between domains. *)
   val create_plain : unit -> t
+
+  (** Hashconsed mode behind a mutex, for a cache shared between domains. Every
+      intern, clear and stats call takes the lock, so interning serialises; that
+      cost buys you hash-cons identity holding across domains.
+
+      Only when domains must share identity. Where each domain can own its own
+      cache, {!create} is the same thing without the lock, and where the parse
+      is one-shot, {!create_plain} is already shareable. *)
+  val create_synchronized : ?capacity:int -> unit -> t
 
   (** Drops every entry from both tables. Plain mode holds no tables, so there
       it does nothing. Later lookups miss and re-insert. Existing
@@ -106,7 +138,11 @@ module Cache : sig
       post-clear tags. The tree comes out well-formed, but structurally-equal
       subtrees either side of the clear end up with different tags, which
       quietly breaks {!Green.equal}. Finish or abandon any in-flight builders
-      first. *)
+      first.
+
+      On a {!create_synchronized} cache the lock keeps the tables consistent but
+      cannot help with any of that: give the cache to one domain for the
+      duration of the clear. *)
   val clear : t -> unit
 
   (** {2 Diagnostics} *)

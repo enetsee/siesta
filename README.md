@@ -82,7 +82,7 @@ The public surface is exactly the five modules re-exported from `Siesta`
 | `Green` | Immutable, hash-consed tree: nodes, tokens, children. All accessors O(1). |
 | `Builder` | Event-driven green construction (`start_node` / `token` / `finish_node`) with checkpoints. |
 | `Syntax` | Persistent red-cursor layer: navigation, parent pointers, offset lookup, traversal, `Ptr`, `replace` / `splice`. |
-| `Cache` | Hash-cons cache. `Hashconsed` (sharing) or `Plain` (one-shot, no dedup). |
+| `Cache` | Hash-cons cache. `Hashconsed` (sharing), `Plain` (one-shot, no dedup), or `Synchronized` (shared between domains). |
 | `Dedup` | The specialised weak-table hash-cons engine. Internal, exposed only so the test suite can drive it directly; use `Cache` with `Green` instead. |
 
 ### Green: the tree
@@ -231,9 +231,10 @@ does the same, and keys its queries on `AstId`.
 ### Cache: hash-cons modes
 
 ```ocaml
-val create       : ?capacity:int -> unit -> t   (* Hashconsed: structural sharing *)
-val create_plain : unit -> t                    (* Plain: fresh alloc every time *)
-val clear        : t -> unit
+val create              : ?capacity:int -> unit -> t  (* Hashconsed: structural sharing *)
+val create_plain        : unit -> t                   (* Plain: fresh alloc every time *)
+val create_synchronized : ?capacity:int -> unit -> t  (* Hashconsed behind a mutex *)
+val clear               : t -> unit
 ```
 
 - **Hashconsed**. Weak-table dedup. Use it for incremental editors where a
@@ -243,6 +244,9 @@ val clear        : t -> unit
   so Plain trades it away. `Green.equal` still works via tags; cross-tree
   sharing is lost. `bench/bench.ml` measures the two modes side by side on
   high-sharing and low-sharing corpora.
+- **Synchronized**. Hashconsed behind a `Mutex.t`, for a cache shared between
+  domains. Interning serialises, and that cost buys hash-cons identity holding
+  across domains. See [Domains](#domains).
 
 `clear` drops entries but never resets the global tag counter, so previously
 issued handles keep unique tags. **Do not call it mid-build**: open frames would
@@ -354,13 +358,53 @@ summaries.
 
 ---
 
+## Domains
+
+Green values are immutable, so a `Green.node` or `Green.token` can be read from
+any domain once built. Tags come from an atomic counter, so they stay unique
+whichever domain issues them.
+
+Everything else is owned by one domain at a time: a cache from `Cache.create`, a
+`Builder.t`, and a cursor tree from `Syntax.of_root`.
+
+That leaves two ways to work in parallel, and neither needs a lock:
+
+- **Read-only analysis.** Share the green root, and give each domain its own
+  cursor tree. `Syntax.of_root` is O(1), so that costs one record per domain.
+  The memoized children arrays behind `Syntax.children_array` are what make a
+  cursor tree single-owner, and a per-domain tree side-steps them entirely.
+- **Parallel one-shot parses.** `Cache.create_plain` holds no tables, so it is
+  shareable. This is already the recommended mode for a one-shot parse, which is
+  what a batch of files across domains is.
+
+`Cache.create_synchronized` is the remaining case, for when domains must agree
+on hash-cons identity. It is opt-in because interning is the hot path:
+`Cache.create` should not pay for a lock the single-domain case never needs.
+
+The underlying constraint is that `Weak` arrays are
+[memory-safe but not consistent](https://github.com/ocaml-multicore/ocaml-multicore/wiki/Safety-of-Stdlib-under-Multicore-OCaml)
+under concurrent update, so an unsynchronised race corrupts table state silently
+rather than crashing. The mutex therefore spans the probe *and* the insert, not
+just the write.
+
+**Domains need OCaml >= 5.5.0.** On 5.2 to 5.4 the runtime segfaults in
+`ephe_mark` when a domain that allocated weak arrays terminates, which any
+Hashconsed cache built inside a domain will hit. It is a runtime bug rather than
+a siesta one, fixed by [ocaml/ocaml#14722](https://github.com/ocaml/ocaml/pull/14722)
+in 5.5.0. The library itself still builds and runs on 5.2; it is only the
+multi-domain use above that needs the newer runtime, and the domain tests are
+gated accordingly.
+
+---
+
 ## Requirements
 
 - **OCaml ≥ 5.2**. `Builder` uses the stdlib `Dynarray`.
 - No runtime dependencies beyond the OCaml stdlib. The test suite uses
   `alcotest` and `qcheck-core`.
-- **Not thread-safe.** The tag counter is a bare `ref`; `siesta` makes no
-  concurrency claims.
+- **Domains** need **OCaml >= 5.5.0**, for a runtime fix. See
+  [below](#domains). Green values are shareable; caches, builders and cursor
+  trees are owned by one domain unless stated otherwise.
 
 ---
 
