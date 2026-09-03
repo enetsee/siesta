@@ -499,16 +499,16 @@ let test_checkpoint_rejected_when_position_stale () =
        has 0)
 ;;
 
-(* [create] allocates a cache when none is passed, and every mutation entry
-   point needs that same cache to keep sharing with the tree it is editing. So
-   the allocated one has to be recoverable, or a tree built with the default is
-   effectively uneditable. *)
+(* [create] allocates a cache when the argument is omitted, and every mutation
+   entry point needs that same cache to keep sharing with the tree it edits. So
+   the allocated one has to be recoverable, leaving a tree built on the default
+   editable. *)
 let test_builder_cache_accessor () =
   let c = Cache.create () in
   let b = Builder.create ~cache:c () in
   Helpers.same "cache passed to create comes back" (Builder.cache b) c;
-  (* And the allocated one is the real cache, not a fresh one: a token interned
-     through it is shared with the one already in the tree. *)
+  (* And the allocated one is the builder's own, shown by a token interned
+     through it coming back shared with the one already in the tree. *)
   let b2 = Builder.create () in
   Builder.start_node b2 K.root;
   Builder.token b2 K.int_lit "1";
@@ -521,11 +521,11 @@ let test_builder_cache_accessor () =
   | Some (Green.Node _) | None -> Alcotest.fail "expected a token child"
 ;;
 
-(* The test above passes under a guard that only asks whether [cp2] ended up
-   past the buffer end, which is a question about spacing rather than about
-   staleness. These two scripts leave [cp2] inside the buffer and are stale all
-   the same: an earlier wrap swallowed the children it was taken to address.
-   The rule is that a wrap at [p] invalidates the checkpoints of that frame with
+(* The test above passes under a guard asking only whether [cp2] ended up past
+   the buffer end, which is a question about spacing rather than staleness.
+   These two scripts leave [cp2] inside the buffer and are stale all the same,
+   an earlier wrap having swallowed the children it was taken to address. The
+   rule is that a wrap at [p] invalidates the checkpoints of that frame with
    [pos > p], whatever the buffer length says. *)
 
 let msg_says_stale msg =
@@ -560,10 +560,10 @@ let test_checkpoint_stale_reuse_wraps_wrong_span () =
       (msg_says_stale msg)
 ;;
 
-(* One token either side of [cp2] instead of two, which leaves [cp2.pos] equal
-   to the post-wrap length rather than past it. Verbatim the failure the test
-   above was written to prevent: a childless node, with the child it was meant
-   to swallow stranded outside it. *)
+(* One token either side of [cp2] instead of two, leaving [cp2.pos] equal to the
+   post-wrap length rather than past it. Verbatim the failure the test above was
+   written to prevent, a childless node with the child it was meant to swallow
+   stranded outside it. *)
 let test_checkpoint_stale_reuse_at_exact_end () =
   let b = Builder.create () in
   Builder.start_node b K.root;

@@ -73,10 +73,10 @@ let test_plain_nodes_distinct () =
   Alcotest.(check bool) "distinct nodes compare unequal" false (Green.equal a b)
 ;;
 
-(* Plain allocates its record directly rather than going through the weak
-   tables, so it needs the same defensive copy: no bucket to strand an entry in,
-   but [text_len] would still come to disagree with the children it was summed
-   from, and [Syntax] derives every cursor offset from [text_len]. *)
+(* Plain allocates its record directly and skips the weak tables, so it needs
+   the same defensive copy. A stranded entry is beyond it, though [text_len]
+   would still drift from the children it was summed over, and [Syntax] derives
+   every cursor offset from [text_len]. *)
 let test_plain_mk_node_copies_children () =
   let c = Cache.create_plain () in
   let a = mk_tok c 1 "aaa" in

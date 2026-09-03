@@ -232,10 +232,10 @@ and parse_atom p =
 ;;
 
 (* The cache comes back with the root because every edit below ([constant_fold],
-   [set_literal], [parenthesise], ...) has to intern through the one the tree was
-   built with, or the rebuilt spine shares nothing with the tree it came from.
+   [set_literal], [parenthesise] and the rest) interns through the one the tree
+   was built with, keeping the rebuilt spine sharing with the tree it came from.
    [Builder.create] allocates one when [?cache] is omitted and [Builder.cache]
-   hands that one back, so [?cache] just passes through. *)
+   hands that one back, so [?cache] passes straight through. *)
 let parse ?cache src =
   let builder = Builder.create ?cache () in
   Builder.start_node builder K.root;

@@ -132,10 +132,10 @@ let test_empty_token () =
 ;;
 
 (* [node_intern] copies the children it is handed, so a caller may reuse the
-   buffer it built them in. Without the copy the array stays reachable as the
-   interned node's children and a later write rewrites a built node in place:
-   [nd_text_len] stops matching them, and the entry sits in a bucket its hash no
-   longer indexes, so the shape can never be found again. *)
+   buffer it built them in. Retaining the array instead leaves a later write
+   rewriting a built node in place; [nd_text_len] drifts from the children, and
+   the entry sits in a bucket its hash no longer indexes, so the shape is lost
+   to every future intern. *)
 let test_node_intern_copies_children () =
   let open Siesta.Dedup in
   let t = token_create () in
@@ -144,7 +144,7 @@ let test_node_intern_copies_children () =
   let b = token_intern t ~kind:0 ~text:"b" in
   let cs = [| Token a; Token a |] in
   let n = node_intern nt ~kind:1 ~text_len:6 ~payload:0 cs in
-  (* Read-modify-rebuild over one buffer, the idiom [Green.children_array]
+  (* Read, modify and rebuild over one buffer, the idiom [Green.children_array]
      invites by handing back a copy that is "safe to mutate". *)
   cs.(1) <- Token b;
   let source (n : node) =
@@ -159,8 +159,8 @@ let test_node_intern_copies_children () =
     "aaaaaa"
     (source n);
   Alcotest.(check int) "text_len still matches the children" 6 n.nd_text_len;
-  (* Still in the bucket its hash indexes, so its own shape finds it again
-     rather than allocating a second record for it. *)
+  (* Still in the bucket its hash indexes, so its own shape finds it again in
+     place of allocating a second record. *)
   let again = node_intern nt ~kind:1 ~text_len:6 ~payload:0 [| Token a; Token a |] in
   Helpers.same "original shape re-interns to the same record" n again
 ;;

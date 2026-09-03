@@ -49,11 +49,11 @@ let same_tree a b = root_of a == root_of b
 let equal a b = a.offset = b.offset && Green.equal a.green b.green
 
 (* Build the children array on demand. Every later call gets the same array, so
-   navigation is stable. One left-to-right sweep does it: each child's offset is
-   the running sum of the text lengths before it, so the offsets need no array
-   of their own, and each child is read from the green node once. [Array.init]
-   is not an option, since it promises no evaluation order and the running
-   offset depends on one.
+   navigation is stable. One left to right sweep does it, since each child's
+   offset is the running sum of the text lengths before it; the offsets stay in
+   a ref and each child is read from the green node once. [Array.init] leaves
+   its evaluation order unspecified and the running offset depends on one, hence
+   the explicit loop.
 
    This memo is why a cursor tree belongs to one domain. Two domains navigating
    the same tree would each build an array and one write would win, so the
@@ -90,8 +90,8 @@ let materialize_children parent_cursor =
              ; tc_index_in_parent = i
              })
     in
-    (* Seeded with child 0 so the array has an element type; the loop then runs
-       strictly left to right, which is what [off] needs. *)
+    (* Seeded with child 0 to give [Array.make] an element; the loop then runs
+       strictly left to right, as [off] requires. *)
     let out = Array.make n (elem_of 0) in
     for i = 1 to n - 1 do
       out.(i) <- elem_of i
@@ -425,7 +425,8 @@ let replace cache target new_green =
 let splice_children cache target ~at ~remove inserts =
   let g = target.green in
   let n = Green.num_children g in
-  (* Validated before anything is allocated, so a rejected call costs nothing. *)
+  (* Validated ahead of the allocations, so a rejected call pays for the two
+     comparisons alone. *)
   if at < 0 || at > n
   then
     invalid_arg (Printf.sprintf "Syntax.splice_children: at=%d out of range [0..%d]" at n);
@@ -444,9 +445,9 @@ let splice_children cache target ~at ~remove inserts =
     | Some c -> c
     | None -> assert false
   in
-  (* Read straight into the result. Going through [Green.children_array] would
-     copy every child once for a private array that is then only ever read, and
-     the kept ends get copied again on the way out of it. *)
+  (* Read straight into the result. [Green.children_array] would copy every
+     child into a private array that is then only read, and the kept ends would
+     be copied again coming out of it. *)
   let new_cs =
     Array.init
       (n - remove + ins)

@@ -155,9 +155,9 @@ Reusing the same `cp` for each operator builds `1+2+3` as `BIN(BIN(1,+,2),+,3)`.
 Checkpoints are bound to their frame: using one after that frame has closed, or
 after a deeper frame was pushed on top, raises `Failure` rather than silently
 wrapping the wrong children. So does using one that an earlier checkpoint from
-the same frame has since swallowed: that wrap took everything from the earlier
-position onwards, so the later checkpoint no longer addresses what it was taken
-to address, whatever is sitting at its offset by then. The
+the same frame has since swallowed, because that wrap took everything from the
+earlier position onwards and the later checkpoint now addresses whatever has
+landed at its offset since. The
 emitters raise `Failure` on misuse too (wrong nesting, token before any node,
 finish with open frames, use after `finish`).
 

@@ -86,7 +86,9 @@ type frame =
   ; f_payload : int
   ; f_gen : int
   ; mutable f_items : shape list (* reversed *)
-  ; mutable f_lowest_wrap : int (* leftmost position wrapped at, else max_int *)
+  ; mutable f_lowest_wrap : int
+    (* leftmost position wrapped at, else max_int *)
+    (* Mirrors [Builder.frame.lowest_wrap]; see [step]'s [Start_at]. *)
   }
 
 type mark =
@@ -148,9 +150,9 @@ let step m = function
        let have = List.length top.f_items in
        (* A wrap at [p] swallows every item from [p] on, so it invalidates
           exactly this frame's marks taken further right. Derived from what a
-          checkpoint is for, not from what the builder happens to reject: the
-          [m_pos > have] rule this replaces was the builder's own heuristic, and
-          a model that copies it cannot witness the heuristic missing. *)
+          checkpoint means; the [m_pos > have] rule it replaces came from the
+          builder's own heuristic, and a model copying the implementation is
+          blind to that implementation missing. *)
        if cp.m_pos > top.f_lowest_wrap || cp.m_pos > have then raise Illegal;
        if cp.m_pos < top.f_lowest_wrap then top.f_lowest_wrap <- cp.m_pos;
        (* The trailing [have - m_pos] items move into the new frame. *)

@@ -9,10 +9,9 @@ type frame =
   ; gen : int
   ; children_start : int
   ; mutable lowest_wrap : int
-    (* Leftmost position this frame has been wrapped at, or [max_int] if it has
-       not been. A wrap at [p] swallows [p, len), so it is exactly the
-       checkpoints of this frame with [pos > p] that stop addressing what they
-       were taken to address. See [start_node_at]. *)
+    (* Leftmost position this frame has been wrapped at, [max_int] while it is
+       untouched. A wrap at [p] swallows [p, len), so it strands exactly the
+       checkpoints of this frame with [pos > p]. See [start_node_at]. *)
   }
 
 type t =
@@ -121,15 +120,14 @@ let start_node_at t ?(payload = 0) (cp : checkpoint) kind =
   | top :: _ when top.gen <> cp.frame_gen ->
     failwith "Builder.start_node_at: checkpoint is not from the open frame"
   | top :: _ when cp.pos > top.lowest_wrap ->
-    (* An earlier checkpoint of this frame has been wrapped at [lowest_wrap],
-       which swallowed everything from there on. Whatever sits at [cp.pos] now
-       is not what [cp] was taken to address, so reuse is rejected rather than
-       silently wrapping the wrong span. *)
+    (* A wrap at [lowest_wrap] took everything from there on, so [cp.pos] now
+       addresses whatever has since landed at that offset. Rejected, in place of
+       wrapping the wrong span. *)
     failwith "Builder.start_node_at: checkpoint position is stale"
   | _ :: _ when cp.pos > Dynarray.length t.children ->
-    (* Subsumed by the check above, since the buffer only ever shrinks through a
-       wrap. Kept as a cheap backstop: it is what keeps [children_start] inside
-       the buffer if the bookkeeping above is ever wrong. *)
+    (* Subsumed by the check above, since the buffer shrinks only through a
+       wrap. Kept as a backstop, holding [children_start] inside the buffer if
+       that bookkeeping ever goes wrong. *)
     failwith "Builder.start_node_at: checkpoint position is stale"
   | top :: _ ->
     (* The children to be wrapped already sit at [cp.pos] onwards, so the new

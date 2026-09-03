@@ -239,9 +239,9 @@ module Green : sig
       is computed by summing the lengths of [children]. [?payload] defaults to
       0; see {!payload} for semantics.
 
-      [children] is not retained: the node gets its own copy, so the array
-      passed in stays free to mutate. That makes the read-modify-rebuild idiom
-      over {!children_array} safe to run more than once on one buffer. *)
+      The node takes its own copy of [children], so the array passed in stays
+      free to mutate afterwards. Read, modify and rebuild over one buffer from
+      {!children_array} is therefore safe to repeat. *)
   val mk_node
     :  Cache.t
     -> kind:int
@@ -292,9 +292,8 @@ module Builder : sig
   (** The cache this builder interns through, whether passed to {!create} or
       allocated by it. Every mutation entry point takes one ({!Syntax.replace},
       {!Syntax.splice_children}, {!Syntax.replace_child}, {!Syntax.splice_at}),
-      so hold on to this if the tree is going to be edited: editing through a
-      different cache builds the new spine without sharing anything with the
-      old tree. *)
+      so keep this if the tree is going to be edited. A different cache rebuilds
+      the spine as fresh records, losing the sharing with the original tree. *)
   val cache : t -> Cache.t
 
   (** {2 Event emitters}
@@ -334,12 +333,12 @@ module Builder : sig
 
       Raises [Failure] if [cp] came from a frame that is no longer the open one,
       whether closed or buried under a deeper [start_node]. Raises too if an
-      {i earlier} checkpoint from the same frame has been reused since: that
-      wrap swallowed everything from the earlier position onwards, so [cp] no
-      longer addresses the children it was taken to address. That holds whatever
-      is sitting at [cp]'s offset by then, including when later children have
-      refilled the buffer past it. Reusing one checkpoint repeatedly is fine;
-      interleaving two from the same frame works only innermost-last. *)
+      {i earlier} checkpoint from the same frame has been reused since, because
+      that wrap took everything from the earlier position onwards and [cp] now
+      addresses whatever has landed at its offset since. That holds however many
+      children have refilled the buffer past it. Reusing one checkpoint
+      repeatedly is fine; interleaving two from the same frame works
+      innermost-last. *)
   val start_node_at : t -> ?payload:int -> checkpoint -> int -> unit
 end
 

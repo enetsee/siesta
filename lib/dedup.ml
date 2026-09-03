@@ -142,10 +142,9 @@ let bucket_put (buckets : 'a Weak.t array) i (v : 'a) =
   then Weak.set b !free (Some v)
   else (
     let cap' = grow_cap cap in
-    (* [grow_cap] clamps, so at the ceiling [cap' = cap] and there is no slot
-       [cap] in the new bucket to write [v] into. Reaching it needs 2^54 entries
-       hashing to one bucket; the check is here to say that out loud rather than
-       write out of bounds if it somehow happened. *)
+    (* [grow_cap] clamps, so at the ceiling [cap' = cap] and slot [cap] falls
+       outside the new bucket. Reaching it takes 2^54 entries in one bucket, so
+       the check records the bound and keeps the write in range. *)
     if cap' <= cap then failwith "Dedup.bucket_put: bucket cannot grow further";
     let b' = Weak.create cap' in
     Weak.blit b 0 b' 0 cap;
@@ -175,9 +174,8 @@ let table_stats t =
 let rehash t index_of =
   let old = t.buckets in
   let n = Array.length old in
-  (* Collect the survivors first: [t.size] counts inserts, not live entries, so
-     it is the live count that has to decide whether the table actually needs to
-     be bigger. Held strongly only for the rebuild. *)
+  (* Collect the survivors first, since [t.size] counts inserts and the live
+     count is what decides the width. Held strongly for the rebuild only. *)
   let live = ref [] in
   let count = ref 0 in
   Array.iter
@@ -190,7 +188,7 @@ let rehash t index_of =
          | None -> ()
        done)
     old;
-  (* Grow only under real load. Otherwise rebuild at the same width, which still
+  (* Grow under real load, otherwise rebuild at the same width, which still
      drops the dead entries and reclaims the bucket arrays [bucket_put] grew. *)
   let n' = if !count > load * n then min (n * 2) (Sys.max_array_length - 1) else n in
   let fresh = Array.make n' (Weak.create 0) in
@@ -279,10 +277,10 @@ let node_intern (t : node_t) ~kind ~text_len ~payload (children : child array) :
   | Some e -> e
   | None ->
     (* Copy, or the caller keeps a handle on an interned node's children and a
-       later mutation silently corrupts it: [nd_text_len] stops matching the
-       children, and the entry sits in a bucket its hash no longer indexes, so
-       it can never be found again. The cost lands on the miss path only, where
-       a record is being allocated anyway; a hit copies nothing. *)
+       later write to it corrupts the node silently; [nd_text_len] stops
+       matching the children, and the entry sits in a bucket its hash no longer
+       indexes, so the shape is lost to every future intern. The cost falls on
+       the miss path, which is allocating a record anyway. *)
     let e =
       { nd_tag = fresh_tag ()
       ; nd_kind = kind

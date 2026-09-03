@@ -73,24 +73,23 @@ let test_churn () =
     again
 ;;
 
-(* -- the table sizes itself to the live set, not the running total --------- *)
+(* -- the table sizes itself to the live set -------------------------------- *)
 
 (* An editor re-parsing on every keystroke interns a fresh batch each round and
-   keeps almost none of it. The bucket array has to size itself to what is still
-   alive; sizing it to the total interned makes it grow for the life of the
-   session, since every round's misses push the insert counter past the resize
-   threshold again. [rehash] therefore counts the survivors before it decides to
-   widen.
+   keeps a handful of it. The bucket array has to size itself to the live set;
+   sized to the total interned it grows for the life of the session, since every
+   round's misses push the insert counter past the resize threshold again.
+   [rehash] therefore counts the survivors before it widens.
 
-   The bar is a ratio rather than an absolute width: how many buckets a given
-   live set wants depends on how much the GC has reaped by the time a rehash
-   lands, which is a heuristic. Growth in the total interned is not. *)
+   The bar is a ratio, because the width a given live set wants follows how much
+   the GC has reaped by the time a rehash lands (a heuristic), whereas growth in
+   the total interned is arithmetic. *)
 let test_churn_bounded_buckets () =
   let t = Siesta.Dedup.token_create () in
   let rounds = 12 in
   let per_round = 20_000 in
   (* Measured a quarter of the way in, so the remaining rounds quadruple the
-     total interned. Width that tracks the total doubles twice over that. *)
+     total interned; a width tracking the total doubles twice over that. *)
   let baseline_round = 3 in
   let baseline = ref 0 in
   let kept = ref [] in
@@ -100,8 +99,7 @@ let test_churn_bounded_buckets () =
     for j = 0 to per_round - 1 do
       ignore (Siesta.Dedup.token_intern t ~kind:0 ~text:(Printf.sprintf "r%d_%d" r j))
     done;
-    (* One survivor per round, as a re-parse keeps the tokens that did not
-       change. *)
+    (* One survivor per round, as a re-parse keeps the tokens it still uses. *)
     kept := Siesta.Dedup.token_intern t ~kind:1 ~text:(Printf.sprintf "keep%d" r) :: !kept;
     Gc.full_major ();
     let n, live, slots, _, _, _ = Siesta.Dedup.token_stats t in
@@ -116,9 +114,9 @@ let test_churn_bounded_buckets () =
     final_live := live;
     final_buckets := n
   done;
-  (* The premise of the bound below: the round's batch really is dead by now, so
-     a table that kept growing would be growing for nothing. Same 5% tolerance
-     as [test_weak_collection]. *)
+  (* The premise of the bound below, that the round's batch really is dead by
+     now, so a table still growing is growing on reaped entries. Same 5%
+     tolerance as [test_weak_collection]. *)
   Alcotest.(check bool)
     (Printf.sprintf "churn: batch reaped, %d live after %d rounds" !final_live rounds)
     true
@@ -132,8 +130,8 @@ let test_churn_bounded_buckets () =
        (rounds * per_round))
     true
     (!final_buckets <= 2 * !baseline);
-  (* Keep the survivors alive to here, or the GC is free to reap them mid-run
-     and the live count above stops meaning anything. *)
+  (* Keep the survivors alive to here, or the GC may reap them mid-run and the
+     live count above measures the wrong thing. *)
   ignore (Sys.opaque_identity !kept)
 ;;
 
