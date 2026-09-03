@@ -73,6 +73,27 @@ let test_plain_nodes_distinct () =
   Alcotest.(check bool) "distinct nodes compare unequal" false (Green.equal a b)
 ;;
 
+(* Plain allocates its record directly rather than going through the weak
+   tables, so it needs the same defensive copy: no bucket to strand an entry in,
+   but [text_len] would still come to disagree with the children it was summed
+   from, and [Syntax] derives every cursor offset from [text_len]. *)
+let test_plain_mk_node_copies_children () =
+  let c = Cache.create_plain () in
+  let a = mk_tok c 1 "aaa" in
+  let b = mk_tok c 1 "b" in
+  let cs = [| Green.Token a; Green.Token a |] in
+  let n = mk_node c K.bin_expr cs in
+  cs.(1) <- Green.Token b;
+  Alcotest.(check string)
+    "Plain: children survive a write to the caller's array"
+    "aaaaaa"
+    (Green.to_source n);
+  Alcotest.(check int)
+    "Plain: text_len still matches to_source"
+    (String.length (Green.to_source n))
+    (Green.text_len n)
+;;
+
 (* Same shape, same Plain cache, two builds, two distinct roots. That is the
    defining difference from a Hashconsed cache. *)
 let test_plain_no_cross_build_sharing () =
@@ -206,6 +227,10 @@ let () =
     [ ( "plain cache mode"
       , [ Alcotest.test_case "tokens distinct" `Quick test_plain_tokens_distinct
         ; Alcotest.test_case "nodes distinct" `Quick test_plain_nodes_distinct
+        ; Alcotest.test_case
+            "mk_node copies children"
+            `Quick
+            test_plain_mk_node_copies_children
         ; Alcotest.test_case
             "no cross-build sharing"
             `Quick

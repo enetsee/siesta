@@ -164,28 +164,34 @@ let table_stats t =
   n, !live, total, caps.(0), caps.(n / 2), caps.(n - 1)
 ;;
 
-(* Rebuild the bucket array at double the size, dropping the dead entries and
-   re-placing the live ones. [index_of] is the only part that depends on the
-   element type, so it comes in as an argument. *)
+(* Rebuild the bucket array, dropping the dead entries and re-placing the live
+   ones. [index_of] is the only part that depends on the element type, so it
+   comes in as an argument. *)
 let rehash t index_of =
   let old = t.buckets in
-  let n' = min (Array.length old * 2) (Sys.max_array_length - 1) in
-  if n' > Array.length old
-  then (
-    let fresh = Array.make n' (Weak.create 0) in
-    let live = ref 0 in
-    Array.iter
-      (fun b ->
-         for j = 0 to Weak.length b - 1 do
-           match Weak.get b j with
-           | Some v ->
-             bucket_put fresh (index_of v n') v;
-             incr live
-           | None -> ()
-         done)
-      old;
-    t.buckets <- fresh;
-    t.size <- !live)
+  let n = Array.length old in
+  (* Collect the survivors first: [t.size] counts inserts, not live entries, so
+     it is the live count that has to decide whether the table actually needs to
+     be bigger. Held strongly only for the rebuild. *)
+  let live = ref [] in
+  let count = ref 0 in
+  Array.iter
+    (fun b ->
+       for j = 0 to Weak.length b - 1 do
+         match Weak.get b j with
+         | Some v ->
+           live := v :: !live;
+           incr count
+         | None -> ()
+       done)
+    old;
+  (* Grow only under real load. Otherwise rebuild at the same width, which still
+     drops the dead entries and reclaims the bucket arrays [bucket_put] grew. *)
+  let n' = if !count > load * n then min (n * 2) (Sys.max_array_length - 1) else n in
+  let fresh = Array.make n' (Weak.create 0) in
+  List.iter (fun v -> bucket_put fresh (index_of v n') v) !live;
+  t.buckets <- fresh;
+  t.size <- !count
 ;;
 
 (* ---- token table --------------------------------------------------------- *)
@@ -267,11 +273,16 @@ let node_intern (t : node_t) ~kind ~text_len ~payload (children : child array) :
   match !found with
   | Some e -> e
   | None ->
+    (* Copy, or the caller keeps a handle on an interned node's children and a
+       later mutation silently corrupts it: [nd_text_len] stops matching the
+       children, and the entry sits in a bucket its hash no longer indexes, so
+       it can never be found again. The cost lands on the miss path only, where
+       a record is being allocated anyway; a hit copies nothing. *)
     let e =
       { nd_tag = fresh_tag ()
       ; nd_kind = kind
       ; nd_text_len = text_len
-      ; nd_children = children
+      ; nd_children = Array.copy children
       ; nd_payload = payload
       }
     in

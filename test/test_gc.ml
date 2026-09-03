@@ -73,6 +73,70 @@ let test_churn () =
     again
 ;;
 
+(* -- the table sizes itself to the live set, not the running total --------- *)
+
+(* An editor re-parsing on every keystroke interns a fresh batch each round and
+   keeps almost none of it. The bucket array has to size itself to what is still
+   alive; sizing it to the total interned makes it grow for the life of the
+   session, since every round's misses push the insert counter past the resize
+   threshold again. [rehash] therefore counts the survivors before it decides to
+   widen.
+
+   The bar is a ratio rather than an absolute width: how many buckets a given
+   live set wants depends on how much the GC has reaped by the time a rehash
+   lands, which is a heuristic. Growth in the total interned is not. *)
+let test_churn_bounded_buckets () =
+  let t = Siesta.Dedup.token_create () in
+  let rounds = 12 in
+  let per_round = 20_000 in
+  (* Measured a quarter of the way in, so the remaining rounds quadruple the
+     total interned. Width that tracks the total doubles twice over that. *)
+  let baseline_round = 3 in
+  let baseline = ref 0 in
+  let kept = ref [] in
+  let final_live = ref 0 in
+  let final_buckets = ref 0 in
+  for r = 1 to rounds do
+    for j = 0 to per_round - 1 do
+      ignore (Siesta.Dedup.token_intern t ~kind:0 ~text:(Printf.sprintf "r%d_%d" r j))
+    done;
+    (* One survivor per round, as a re-parse keeps the tokens that did not
+       change. *)
+    kept := Siesta.Dedup.token_intern t ~kind:1 ~text:(Printf.sprintf "keep%d" r) :: !kept;
+    Gc.full_major ();
+    let n, live, slots, _, _, _ = Siesta.Dedup.token_stats t in
+    Printf.printf
+      "  round %2d: interned=%7d buckets=%6d live=%5d slots=%7d\n"
+      r
+      (r * per_round)
+      n
+      live
+      slots;
+    if r = baseline_round then baseline := n;
+    final_live := live;
+    final_buckets := n
+  done;
+  (* The premise of the bound below: the round's batch really is dead by now, so
+     a table that kept growing would be growing for nothing. Same 5% tolerance
+     as [test_weak_collection]. *)
+  Alcotest.(check bool)
+    (Printf.sprintf "churn: batch reaped, %d live after %d rounds" !final_live rounds)
+    true
+    (!final_live <= List.length !kept + (per_round / 20));
+  Alcotest.(check bool)
+    (Printf.sprintf
+       "churn: bucket array tracks the live set (%d buckets at %d interns, %d at %d)"
+       !baseline
+       (baseline_round * per_round)
+       !final_buckets
+       (rounds * per_round))
+    true
+    (!final_buckets <= 2 * !baseline);
+  (* Keep the survivors alive to here, or the GC is free to reap them mid-run
+     and the live count above stops meaning anything. *)
+  ignore (Sys.opaque_identity !kept)
+;;
+
 (* -- deduplication holds when refs survive --------------------------------- *)
 
 (* Two builds of the same shape in one cache, with nothing collected in
@@ -133,6 +197,10 @@ let () =
     [ ( "weak-table"
       , [ Alcotest.test_case "collection happens" `Quick test_weak_collection
         ; Alcotest.test_case "no crash under churn" `Quick test_churn
+        ; Alcotest.test_case
+            "churn leaves the bucket array bounded"
+            `Quick
+            test_churn_bounded_buckets
         ; Alcotest.test_case "dedup holds without GC" `Quick test_no_gc_dedup
         ; Alcotest.test_case
             "clear preserves tag uniqueness"

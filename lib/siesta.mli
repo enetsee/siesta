@@ -237,7 +237,11 @@ module Green : sig
 
   (** [mk_node cache ~kind ?payload ~children ()] builds a node whose [text_len]
       is computed by summing the lengths of [children]. [?payload] defaults to
-      0; see {!payload} for semantics. *)
+      0; see {!payload} for semantics.
+
+      [children] is not retained: the node gets its own copy, so the array
+      passed in stays free to mutate. That makes the read-modify-rebuild idiom
+      over {!children_array} safe to run more than once on one buffer. *)
   val mk_node
     :  Cache.t
     -> kind:int

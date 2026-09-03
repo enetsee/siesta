@@ -68,11 +68,15 @@ let hashcons_node (t : t) ~kind ~text_len ~payload (children : Dedup.child array
     Mutex.protect lock (fun () ->
       Dedup.node_intern nodes ~kind ~text_len ~payload children)
   | Plain ->
+    (* Copy for the same reason as the miss path in [Dedup.node_intern]: the
+       caller's array must not stay reachable as a built node's children. Plain
+       has no bucket to strand an entry in, but [nd_text_len] would still come
+       to disagree with the children it was summed from. *)
     Dedup.
       { nd_tag = fresh_tag ()
       ; nd_kind = kind
       ; nd_text_len = text_len
-      ; nd_children = children
+      ; nd_children = Array.copy children
       ; nd_payload = payload
       }
 ;;

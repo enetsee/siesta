@@ -131,6 +131,40 @@ let test_empty_token () =
   Helpers.same "empty token text dedupes" empty again
 ;;
 
+(* [node_intern] copies the children it is handed, so a caller may reuse the
+   buffer it built them in. Without the copy the array stays reachable as the
+   interned node's children and a later write rewrites a built node in place:
+   [nd_text_len] stops matching them, and the entry sits in a bucket its hash no
+   longer indexes, so the shape can never be found again. *)
+let test_node_intern_copies_children () =
+  let open Siesta.Dedup in
+  let t = token_create () in
+  let nt = node_create () in
+  let a = token_intern t ~kind:0 ~text:"aaa" in
+  let b = token_intern t ~kind:0 ~text:"b" in
+  let cs = [| Token a; Token a |] in
+  let n = node_intern nt ~kind:1 ~text_len:6 ~payload:0 cs in
+  (* Read-modify-rebuild over one buffer, the idiom [Green.children_array]
+     invites by handing back a copy that is "safe to mutate". *)
+  cs.(1) <- Token b;
+  let source (n : node) =
+    Array.to_list n.nd_children
+    |> List.map (function
+      | Token t -> t.tk_text
+      | Node _ -> "?")
+    |> String.concat ""
+  in
+  Alcotest.(check string)
+    "children survive a write to the caller's array"
+    "aaaaaa"
+    (source n);
+  Alcotest.(check int) "text_len still matches the children" 6 n.nd_text_len;
+  (* Still in the bucket its hash indexes, so its own shape finds it again
+     rather than allocating a second record for it. *)
+  let again = node_intern nt ~kind:1 ~text_len:6 ~payload:0 [| Token a; Token a |] in
+  Helpers.same "original shape re-interns to the same record" n again
+;;
+
 let test_empty_children () =
   let nt = Siesta.Dedup.node_create () in
   let a = Siesta.Dedup.node_intern nt ~kind:1 ~text_len:0 ~payload:0 [||] in
@@ -246,6 +280,10 @@ let () =
     ; ( "nodes"
       , [ Alcotest.test_case "idempotence" `Quick test_node_idempotence
         ; Alcotest.test_case "distinctness" `Quick test_node_distinctness
+        ; Alcotest.test_case
+            "intern copies children"
+            `Quick
+            test_node_intern_copies_children
         ; Alcotest.test_case "empty children" `Quick test_empty_children
         ] )
     ; ( "table"
