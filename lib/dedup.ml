@@ -142,6 +142,11 @@ let bucket_put (buckets : 'a Weak.t array) i (v : 'a) =
   then Weak.set b !free (Some v)
   else (
     let cap' = grow_cap cap in
+    (* [grow_cap] clamps, so at the ceiling [cap' = cap] and there is no slot
+       [cap] in the new bucket to write [v] into. Reaching it needs 2^54 entries
+       hashing to one bucket; the check is here to say that out loud rather than
+       write out of bounds if it somehow happened. *)
+    if cap' <= cap then failwith "Dedup.bucket_put: bucket cannot grow further";
     let b' = Weak.create cap' in
     Weak.blit b 0 b' 0 cap;
     Weak.set b' cap (Some v);
@@ -152,7 +157,7 @@ let table_stats t =
   let buckets = t.buckets in
   let n = Array.length buckets in
   let caps = Array.map Weak.length buckets in
-  Array.sort compare caps;
+  Array.sort Int.compare caps;
   let total = Array.fold_left ( + ) 0 caps in
   let live = ref 0 in
   Array.iter

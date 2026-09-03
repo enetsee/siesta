@@ -49,8 +49,11 @@ let same_tree a b = root_of a == root_of b
 let equal a b = a.offset = b.offset && Green.equal a.green b.green
 
 (* Build the children array on demand. Every later call gets the same array, so
-   navigation is stable. Offsets come from their own left-to-right sweep,
-   because [Array.init] promises no evaluation order.
+   navigation is stable. One left-to-right sweep does it: each child's offset is
+   the running sum of the text lengths before it, so the offsets need no array
+   of their own, and each child is read from the green node once. [Array.init]
+   is not an option, since it promises no evaluation order and the running
+   offset depends on one.
 
    This memo is why a cursor tree belongs to one domain. Two domains navigating
    the same tree would each build an array and one write would win, so the
@@ -60,33 +63,40 @@ let equal a b = a.offset = b.offset && Green.equal a.green b.green
 let materialize_children parent_cursor =
   let g = parent_cursor.green in
   let n = Green.num_children g in
-  let offsets = Array.make n 0 in
-  let off = ref parent_cursor.offset in
-  for i = 0 to n - 1 do
-    offsets.(i) <- !off;
-    match Green.nth_child g i with
-    | Some c -> off := !off + Green.child_text_len c
-    | None -> assert false
-  done;
-  Array.init n (fun i ->
-    let child_off = offsets.(i) in
-    match Green.nth_child g i with
-    | Some (Green.Node g) ->
-      Node
-        { green = g
-        ; parent = Some parent_cursor
-        ; offset = child_off
-        ; index_in_parent = i
-        ; children_mem = None
-        }
-    | Some (Green.Token t) ->
-      Token
-        { tc_green = t
-        ; tc_parent = parent_cursor
-        ; tc_offset = child_off
-        ; tc_index_in_parent = i
-        }
-    | None -> assert false)
+  if n = 0
+  then [||]
+  else (
+    let off = ref parent_cursor.offset in
+    let elem_of i =
+      match Green.nth_child g i with
+      | None -> assert false
+      | Some c ->
+        let child_off = !off in
+        off := child_off + Green.child_text_len c;
+        (match c with
+         | Green.Node cg ->
+           Node
+             { green = cg
+             ; parent = Some parent_cursor
+             ; offset = child_off
+             ; index_in_parent = i
+             ; children_mem = None
+             }
+         | Green.Token t ->
+           Token
+             { tc_green = t
+             ; tc_parent = parent_cursor
+             ; tc_offset = child_off
+             ; tc_index_in_parent = i
+             })
+    in
+    (* Seeded with child 0 so the array has an element type; the loop then runs
+       strictly left to right, which is what [off] needs. *)
+    let out = Array.make n (elem_of 0) in
+    for i = 1 to n - 1 do
+      out.(i) <- elem_of i
+    done;
+    out)
 ;;
 
 let ensure_children t =
@@ -413,8 +423,9 @@ let replace cache target new_green =
 ;;
 
 let splice_children cache target ~at ~remove inserts =
-  let old_cs = Green.children_array target.green in
-  let n = Array.length old_cs in
+  let g = target.green in
+  let n = Green.num_children g in
+  (* Validated before anything is allocated, so a rejected call costs nothing. *)
   if at < 0 || at > n
   then
     invalid_arg (Printf.sprintf "Syntax.splice_children: at=%d out of range [0..%d]" at n);
@@ -427,12 +438,24 @@ let splice_children cache target ~at ~remove inserts =
          at
          n);
   let inserts_arr = Array.of_list inserts in
+  let ins = Array.length inserts_arr in
+  let child j =
+    match Green.nth_child g j with
+    | Some c -> c
+    | None -> assert false
+  in
+  (* Read straight into the result. Going through [Green.children_array] would
+     copy every child once for a private array that is then only ever read, and
+     the kept ends get copied again on the way out of it. *)
   let new_cs =
-    Array.concat
-      [ Array.sub old_cs 0 at
-      ; inserts_arr
-      ; Array.sub old_cs (at + remove) (n - at - remove)
-      ]
+    Array.init
+      (n - remove + ins)
+      (fun j ->
+         if j < at
+         then child j
+         else if j < at + ins
+         then inserts_arr.(j - at)
+         else child (j - ins + remove))
   in
   let new_target_green =
     Green.mk_node
