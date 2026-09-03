@@ -289,6 +289,14 @@ module Builder : sig
       buffer just grows; too large costs O(hint) words up front. *)
   val create : ?cache:Cache.t -> ?initial_children_capacity:int -> unit -> t
 
+  (** The cache this builder interns through, whether passed to {!create} or
+      allocated by it. Every mutation entry point takes one ({!Syntax.replace},
+      {!Syntax.splice_children}, {!Syntax.replace_child}, {!Syntax.splice_at}),
+      so hold on to this if the tree is going to be edited: editing through a
+      different cache builds the new spine without sharing anything with the
+      old tree. *)
+  val cache : t -> Cache.t
+
   (** {2 Event emitters}
 
       These raise [Failure] on misuse: wrong nesting, finish before open, a

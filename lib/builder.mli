@@ -7,6 +7,7 @@ type t
 type checkpoint
 
 val create : ?cache:Cache.t -> ?initial_children_capacity:int -> unit -> t
+val cache : t -> Cache.t
 val start_node : t -> ?payload:int -> int -> unit
 val token : t -> int -> string -> unit
 val finish_node : t -> unit

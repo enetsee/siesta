@@ -499,6 +499,28 @@ let test_checkpoint_rejected_when_position_stale () =
        has 0)
 ;;
 
+(* [create] allocates a cache when none is passed, and every mutation entry
+   point needs that same cache to keep sharing with the tree it is editing. So
+   the allocated one has to be recoverable, or a tree built with the default is
+   effectively uneditable. *)
+let test_builder_cache_accessor () =
+  let c = Cache.create () in
+  let b = Builder.create ~cache:c () in
+  Helpers.same "cache passed to create comes back" (Builder.cache b) c;
+  (* And the allocated one is the real cache, not a fresh one: a token interned
+     through it is shared with the one already in the tree. *)
+  let b2 = Builder.create () in
+  Builder.start_node b2 K.root;
+  Builder.token b2 K.int_lit "1";
+  Builder.finish_node b2;
+  let root = Builder.finish b2 in
+  let tok = mk_tok (Builder.cache b2) K.int_lit "1" in
+  match Green.nth_child root 0 with
+  | Some (Green.Token t) ->
+    Helpers.same "recovered default cache still shares with the built tree" t tok
+  | Some (Green.Node _) | None -> Alcotest.fail "expected a token child"
+;;
+
 (* The test above passes under a guard that only asks whether [cp2] ended up
    past the buffer end, which is a question about spacing rather than about
    staleness. These two scripts leave [cp2] inside the buffer and are stale all
@@ -1101,6 +1123,7 @@ let () =
             "checkpoint rejected when position stale"
             `Quick
             test_checkpoint_rejected_when_position_stale
+        ; Alcotest.test_case "builder cache accessor" `Quick test_builder_cache_accessor
         ; Alcotest.test_case
             "checkpoint stale reuse wraps wrong span"
             `Quick

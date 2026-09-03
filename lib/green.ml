@@ -1,8 +1,8 @@
 (* Public green-tree surface.
 
-   The types alias [Dedup]'s flat records, with [tag] inline, so equality and
-   hash are a single field read. See [cache.mli] for what each cache mode means
-   for sharing. *)
+   The types alias [Dedup]'s flat records, with [tag] inline, so equality is a
+   single field read. See [cache.mli] for what each cache mode means for
+   sharing. *)
 
 type token = Dedup.token
 type node = Dedup.node
@@ -23,13 +23,6 @@ let nth_child (n : node) i =
 
 let children_array (n : node) = Array.copy n.Dedup.nd_children
 let tag (n : node) = n.Dedup.nd_tag
-
-let hash (n : node) =
-  Hashtbl.seeded_hash
-    (Hashtbl.seeded_hash n.Dedup.nd_kind n.Dedup.nd_text_len)
-    n.Dedup.nd_payload
-;;
-
 let equal (a : node) (b : node) = a.Dedup.nd_tag = b.Dedup.nd_tag
 
 module Token = struct

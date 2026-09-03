@@ -34,6 +34,8 @@ let create ?cache ?(initial_children_capacity = 64) () =
   { stack = []; root = None; next_gen = 0; cache; children }
 ;;
 
+let cache t = t.cache
+
 let fresh_gen t =
   let g = t.next_gen in
   t.next_gen <- g + 1;

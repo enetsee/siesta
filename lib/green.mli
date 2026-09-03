@@ -14,12 +14,6 @@ val kind : node -> int
 val text_len : node -> int
 val payload : node -> int
 val tag : node -> int
-
-(** Not re-exported by {!Siesta.Green}. A bucket key over [kind], [text_len] and
-    [payload]; children play no part, so structurally-different nodes collide
-    freely. Use {!tag} or {!equal} for identity. *)
-val hash : node -> int
-
 val equal : node -> node -> bool
 val num_children : node -> int
 val nth_child : node -> int -> child option
