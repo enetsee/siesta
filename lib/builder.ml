@@ -8,6 +8,11 @@ type frame =
   ; payload : int
   ; gen : int
   ; children_start : int
+  ; mutable lowest_wrap : int
+    (* Leftmost position this frame has been wrapped at, or [max_int] if it has
+       not been. A wrap at [p] swallows [p, len), so it is exactly the
+       checkpoints of this frame with [pos > p] that stop addressing what they
+       were taken to address. See [start_node_at]. *)
   }
 
 type t =
@@ -39,7 +44,13 @@ let start_node t ?(payload = 0) kind =
   if Option.is_some t.root then failwith "Builder.start_node: tree already finished";
   let gen = fresh_gen t in
   t.stack
-  <- { kind; payload; gen; children_start = Dynarray.length t.children } :: t.stack
+  <- { kind
+     ; payload
+     ; gen
+     ; children_start = Dynarray.length t.children
+     ; lowest_wrap = max_int
+     }
+     :: t.stack
 ;;
 
 let token t kind text =
@@ -107,12 +118,23 @@ let start_node_at t ?(payload = 0) (cp : checkpoint) kind =
   | [] -> failwith "Builder.start_node_at: no open node"
   | top :: _ when top.gen <> cp.frame_gen ->
     failwith "Builder.start_node_at: checkpoint is not from the open frame"
-  | _ :: _ when cp.pos > Dynarray.length t.children ->
+  | top :: _ when cp.pos > top.lowest_wrap ->
+    (* An earlier checkpoint of this frame has been wrapped at [lowest_wrap],
+       which swallowed everything from there on. Whatever sits at [cp.pos] now
+       is not what [cp] was taken to address, so reuse is rejected rather than
+       silently wrapping the wrong span. *)
     failwith "Builder.start_node_at: checkpoint position is stale"
-  | _ :: _ ->
+  | _ :: _ when cp.pos > Dynarray.length t.children ->
+    (* Subsumed by the check above, since the buffer only ever shrinks through a
+       wrap. Kept as a cheap backstop: it is what keeps [children_start] inside
+       the buffer if the bookkeeping above is ever wrong. *)
+    failwith "Builder.start_node_at: checkpoint position is stale"
+  | top :: _ ->
     (* The children to be wrapped already sit at [cp.pos] onwards, so the new
        frame claims them just by starting there. The outer frame keeps its
        own [children_start] and picks up again once this one closes. *)
+    if cp.pos < top.lowest_wrap then top.lowest_wrap <- cp.pos;
     let gen = fresh_gen t in
-    t.stack <- { kind; payload; gen; children_start = cp.pos } :: t.stack
+    t.stack
+    <- { kind; payload; gen; children_start = cp.pos; lowest_wrap = max_int } :: t.stack
 ;;

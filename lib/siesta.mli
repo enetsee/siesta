@@ -326,10 +326,12 @@ module Builder : sig
 
       Raises [Failure] if [cp] came from a frame that is no longer the open one,
       whether closed or buried under a deeper [start_node]. Raises too if an
-      {i earlier} checkpoint from the same frame has been reused since, because
-      wrapping at that earlier position swallows everything from it onwards and
-      leaves [cp] pointing past the end. Reusing one checkpoint repeatedly is
-      fine; interleaving two from the same frame works only innermost-last. *)
+      {i earlier} checkpoint from the same frame has been reused since: that
+      wrap swallowed everything from the earlier position onwards, so [cp] no
+      longer addresses the children it was taken to address. That holds whatever
+      is sitting at [cp]'s offset by then, including when later children have
+      refilled the buffer past it. Reusing one checkpoint repeatedly is fine;
+      interleaving two from the same frame works only innermost-last. *)
   val start_node_at : t -> ?payload:int -> checkpoint -> int -> unit
 end
 

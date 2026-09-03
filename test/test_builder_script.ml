@@ -86,6 +86,7 @@ type frame =
   ; f_payload : int
   ; f_gen : int
   ; mutable f_items : shape list (* reversed *)
+  ; mutable f_lowest_wrap : int (* leftmost position wrapped at, else max_int *)
   }
 
 type mark =
@@ -111,7 +112,14 @@ let fresh_gen m =
 let step m = function
   | Start (k, p) ->
     if Option.is_some m.root then raise Illegal;
-    m.stack <- { f_kind = k; f_payload = p; f_gen = fresh_gen m; f_items = [] } :: m.stack
+    m.stack
+    <- { f_kind = k
+       ; f_payload = p
+       ; f_gen = fresh_gen m
+       ; f_items = []
+       ; f_lowest_wrap = max_int
+       }
+       :: m.stack
   | Tok (k, t) ->
     (match m.stack with
      | [] -> raise Illegal
@@ -138,14 +146,25 @@ let step m = function
        let cp = List.nth m.marks (i mod List.length m.marks) in
        if top.f_gen <> cp.m_gen then raise Illegal;
        let have = List.length top.f_items in
-       if cp.m_pos > have then raise Illegal;
+       (* A wrap at [p] swallows every item from [p] on, so it invalidates
+          exactly this frame's marks taken further right. Derived from what a
+          checkpoint is for, not from what the builder happens to reject: the
+          [m_pos > have] rule this replaces was the builder's own heuristic, and
+          a model that copies it cannot witness the heuristic missing. *)
+       if cp.m_pos > top.f_lowest_wrap || cp.m_pos > have then raise Illegal;
+       if cp.m_pos < top.f_lowest_wrap then top.f_lowest_wrap <- cp.m_pos;
        (* The trailing [have - m_pos] items move into the new frame. *)
        let items = List.rev top.f_items in
        let keep = List.filteri (fun j _ -> j < cp.m_pos) items in
        let moved = List.filteri (fun j _ -> j >= cp.m_pos) items in
        top.f_items <- List.rev keep;
        m.stack
-       <- { f_kind = k; f_payload = p; f_gen = fresh_gen m; f_items = List.rev moved }
+       <- { f_kind = k
+          ; f_payload = p
+          ; f_gen = fresh_gen m
+          ; f_items = List.rev moved
+          ; f_lowest_wrap = max_int
+          }
           :: m.stack)
 ;;
 
@@ -176,7 +195,9 @@ let legal_options m =
     let reuses =
       List.mapi (fun i cp -> i, cp) m.marks
       |> List.filter (fun (_, cp) ->
-        cp.m_gen = top.f_gen && cp.m_pos <= List.length top.f_items)
+        cp.m_gen = top.f_gen
+        && cp.m_pos <= List.length top.f_items
+        && cp.m_pos <= top.f_lowest_wrap)
       |> List.map (fun (i, _) -> `Start_at i)
     in
     [ `Start; `Tok; `Finish; `Mark ] @ reuses
@@ -429,7 +450,8 @@ let test_script_census () =
           match m.stack, e with
           | top :: _, Start_at (i, _, _) when m.marks <> [] ->
             let cp = List.nth m.marks (i mod List.length m.marks) in
-            top.f_gen = cp.m_gen && cp.m_pos > List.length top.f_items
+            top.f_gen = cp.m_gen
+            && (cp.m_pos > top.f_lowest_wrap || cp.m_pos > List.length top.f_items)
           | [], _ | _ :: _, (Start _ | Tok _ | Finish | Mark | Start_at _) -> false
         in
         (match step m e with

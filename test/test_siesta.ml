@@ -499,6 +499,69 @@ let test_checkpoint_rejected_when_position_stale () =
        has 0)
 ;;
 
+(* The test above passes under a guard that only asks whether [cp2] ended up
+   past the buffer end, which is a question about spacing rather than about
+   staleness. These two scripts leave [cp2] inside the buffer and are stale all
+   the same: an earlier wrap swallowed the children it was taken to address.
+   The rule is that a wrap at [p] invalidates the checkpoints of that frame with
+   [pos > p], whatever the buffer length says. *)
+
+let msg_says_stale msg =
+  let n = String.length msg in
+  let rec has i = i + 5 <= n && (String.sub msg i 5 = "stale" || has (i + 1)) in
+  has 0
+;;
+
+(* Refilled past [cp2.pos] after the wrap, so the position is in range again and
+   points at children that arrived later. Reusing it wrapped "p q" rather than
+   everything after "a". *)
+let test_checkpoint_stale_reuse_wraps_wrong_span () =
+  let b = Builder.create () in
+  Builder.start_node b K.root;
+  let cp1 = Builder.checkpoint b in
+  Builder.token b K.int_lit "a";
+  let cp2 = Builder.checkpoint b in
+  Builder.token b K.int_lit "b";
+  (* Wraps a and b, so the buffer is back to a single entry. *)
+  Builder.start_node_at b cp1 K.bin_expr;
+  Builder.finish_node b;
+  Builder.token b K.int_lit "p";
+  Builder.token b K.int_lit "q";
+  try
+    Builder.start_node_at b cp2 K.bin_expr;
+    Alcotest.fail "checkpoint invalidated by an earlier wrap must be rejected"
+  with
+  | Failure msg ->
+    Alcotest.(check bool)
+      (Printf.sprintf "rejected as stale, not by the gen guard (got %S)" msg)
+      true
+      (msg_says_stale msg)
+;;
+
+(* One token either side of [cp2] instead of two, which leaves [cp2.pos] equal
+   to the post-wrap length rather than past it. Verbatim the failure the test
+   above was written to prevent: a childless node, with the child it was meant
+   to swallow stranded outside it. *)
+let test_checkpoint_stale_reuse_at_exact_end () =
+  let b = Builder.create () in
+  Builder.start_node b K.root;
+  let cp1 = Builder.checkpoint b in
+  Builder.token b K.int_lit "x";
+  let cp2 = Builder.checkpoint b in
+  Builder.token b K.int_lit "y";
+  Builder.start_node_at b cp1 K.bin_expr;
+  Builder.finish_node b;
+  try
+    Builder.start_node_at b cp2 K.bin_expr;
+    Alcotest.fail "checkpoint invalidated by an earlier wrap must be rejected"
+  with
+  | Failure msg ->
+    Alcotest.(check bool)
+      (Printf.sprintf "rejected as stale, not by the gen guard (got %S)" msg)
+      true
+      (msg_says_stale msg)
+;;
+
 (* The other order still works. A checkpoint taken later and used before any
    earlier one is reused is untouched, so the guard has to let it through.
    Paired with the test above, so "reject everything" cannot pass both. *)
@@ -1038,6 +1101,14 @@ let () =
             "checkpoint rejected when position stale"
             `Quick
             test_checkpoint_rejected_when_position_stale
+        ; Alcotest.test_case
+            "checkpoint stale reuse wraps wrong span"
+            `Quick
+            test_checkpoint_stale_reuse_wraps_wrong_span
+        ; Alcotest.test_case
+            "checkpoint stale reuse at exact end"
+            `Quick
+            test_checkpoint_stale_reuse_at_exact_end
         ; Alcotest.test_case
             "checkpoint inner-first still wraps"
             `Quick
