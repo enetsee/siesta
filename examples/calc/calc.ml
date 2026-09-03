@@ -231,8 +231,13 @@ and parse_atom p =
     Builder.finish_node p.builder
 ;;
 
-let parse ?(cache = Cache.create ()) src =
-  let builder = Builder.create ~cache () in
+(* The cache comes back with the root because every edit below ([constant_fold],
+   [set_literal], [parenthesise], ...) has to intern through the one the tree was
+   built with, or the rebuilt spine shares nothing with the tree it came from.
+   [Builder.create] allocates one when [?cache] is omitted and [Builder.cache]
+   hands that one back, so [?cache] just passes through. *)
+let parse ?cache src =
+  let builder = Builder.create ?cache () in
   Builder.start_node builder K.root;
   let p = { toks = lex src; builder } in
   parse_expr p;
@@ -243,7 +248,7 @@ let parse ?(cache = Cache.create ()) src =
     Builder.finish_node builder
   done;
   Builder.finish_node builder;
-  cache, Builder.finish builder
+  Builder.cache builder, Builder.finish builder
 ;;
 
 (* ---- typed AST views ------------------------------------------------------ *)
