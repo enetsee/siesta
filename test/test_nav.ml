@@ -292,6 +292,67 @@ let test_offset_boundaries () =
   Alcotest.(check bool) "negative offset" true (Syntax.token_at_offset r (-1) = None)
 ;;
 
+(* The fixture above is 18 characters wide, so it says nothing about how the
+   search behaves across a node with many children. A file's root has one child
+   per top-level item, which is the shape that matters, and zero-width children
+   are the case where a search over child ends could plausibly disagree with a
+   left-to-right scan.
+
+   So: a wide node, zero-width tokens and zero-width nodes scattered through it,
+   and every offset checked against a reference that walks the tokens in source
+   order. That reference is the definition {!token_at_offset} implements. *)
+let test_token_at_offset_wide_node_with_empties () =
+  let cache = Cache.create () in
+  let n = 400 in
+  let children =
+    Array.init n (fun i ->
+      match i mod 4 with
+      | 0 -> Green.Token (mk_tok cache K.id "")
+      | 1 -> Green.Node (mk_node cache K.inner [||])
+      | 2 -> Green.Token (mk_tok cache K.id (Printf.sprintf "%03d" i))
+      | _ -> Green.Node (mk_node cache K.body [| Green.Token (mk_tok cache K.kw "z") |]))
+  in
+  let r = Syntax.of_root (mk_node cache K.root children) in
+  let src = Syntax.to_source r in
+  Alcotest.(check int) "the node really is wide" n (Green.num_children (Syntax.green r));
+  (* Guard the premise: if the fixture ever stops carrying empty ranges, this
+     test quietly stops testing the thing it was written for. *)
+  let empties =
+    Array.fold_left
+      (fun acc c -> if Green.child_text_len c = 0 then acc + 1 else acc)
+      0
+      (Green.children_array (Syntax.green r))
+  in
+  Alcotest.(check int) "zero-width children present" (n / 2) empties;
+  (* Reference: every token in source order, with the span it occupies. *)
+  let spans =
+    let out = ref [] in
+    let off = ref 0 in
+    let rec walk (c : Green.child) =
+      match c with
+      | Green.Token t ->
+        let w = String.length (Green.Token.text t) in
+        out := (!off, !off + w) :: !out;
+        off := !off + w
+      | Green.Node nd -> Array.iter walk (Green.children_array nd)
+    in
+    walk (Green.Node (Syntax.green r));
+    List.rev !out
+  in
+  let reference off = List.find_opt (fun (lo, hi) -> off >= lo && off < hi) spans in
+  for off = -1 to String.length src do
+    let got =
+      match Syntax.token_at_offset r off with
+      | Some tc -> Some (Syntax.Token.text_range tc)
+      | None -> None
+    in
+    Alcotest.(check (option (pair int int)))
+      (Printf.sprintf "offset %d" off)
+      (reference off)
+      got
+  done
+;;
+
 let test_node_at_offset_is_innermost () =
   let r = root_cursor (Cache.create ()) in
   let kind_at off =
@@ -530,6 +591,10 @@ let () =
             `Quick
             test_token_at_offset_exhaustive
         ; Alcotest.test_case "boundaries are half-open" `Quick test_offset_boundaries
+        ; Alcotest.test_case
+            "wide node with zero-width children"
+            `Quick
+            test_token_at_offset_wide_node_with_empties
         ; Alcotest.test_case
             "node_at_offset is innermost"
             `Quick

@@ -161,20 +161,38 @@ let ancestors t =
 
 (* -- offset lookup --------------------------------------------------------- *)
 
-(* The child of [cur] whose half-open range contains [offset]. Children
-   partition the parent's range contiguously and in source order, so the scan
-   can stop the moment one starts past [offset]. *)
+(* [elem_text_range] returns both ends as a tuple. [child_containing] compares
+   one end at a time, so it reads them separately and allocates nothing. *)
+let[@inline] elem_lo = function
+  | Node t -> t.offset
+  | Token tc -> tc.tc_offset
+;;
+
+let[@inline] elem_hi = function
+  | Node t -> t.offset + Green.text_len t.green
+  | Token tc -> tc.tc_offset + String.length (Green.Token.text tc.tc_green)
+;;
+
+(* The child of [cur] whose half-open range contains [offset]. Children are
+   contiguous and in source order, so ends are non-decreasing and the child
+   wanted is the first whose end is past [offset]; binary search for it. That
+   child can still start after [offset], but only when [offset] is left of [cur]
+   itself, which is what the [elem_lo] check catches. Zero-width children have
+   [hi = lo], so no offset is past their end and the search skips them. *)
 let child_containing cur offset =
   let cs = ensure_children cur in
   let n = Array.length cs in
-  let rec find i =
-    if i >= n
-    then None
-    else (
-      let lo, hi = elem_text_range cs.(i) in
-      if offset < lo then None else if offset < hi then Some cs.(i) else find (i + 1))
-  in
-  find 0
+  let lo = ref 0 in
+  let hi = ref n in
+  while !lo < !hi do
+    let mid = (!lo + !hi) lsr 1 in
+    if elem_hi cs.(mid) > offset then hi := mid else lo := mid + 1
+  done;
+  if !lo >= n
+  then None
+  else (
+    let c = cs.(!lo) in
+    if elem_lo c <= offset then Some c else None)
 ;;
 
 let in_range t offset =
