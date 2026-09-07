@@ -203,8 +203,7 @@ module Green : sig
 
   val num_children : node -> int
 
-  (** [nth_child n i] is the [i]th child, or [None] if [i] is out of range. O(1),
-      no allocation. *)
+  (** [nth_child n i] is the [i]th child, or [None] if [i] is out of range. O(1). *)
   val nth_child : node -> int -> child option
 
   (** [children_array n] is a fresh copy of the children array, safe to

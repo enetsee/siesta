@@ -68,27 +68,25 @@ let materialize_children parent_cursor =
   else (
     let off = ref parent_cursor.offset in
     let elem_of i =
-      match Green.nth_child g i with
-      | None -> assert false
-      | Some c ->
-        let child_off = !off in
-        off := child_off + Green.child_text_len c;
-        (match c with
-         | Green.Node cg ->
-           Node
-             { green = cg
-             ; parent = Some parent_cursor
-             ; offset = child_off
-             ; index_in_parent = i
-             ; children_mem = None
-             }
-         | Green.Token t ->
-           Token
-             { tc_green = t
-             ; tc_parent = parent_cursor
-             ; tc_offset = child_off
-             ; tc_index_in_parent = i
-             })
+      let c = Green.nth_child_exn g i in
+      let child_off = !off in
+      off := child_off + Green.child_text_len c;
+      match c with
+      | Green.Node cg ->
+        Node
+          { green = cg
+          ; parent = Some parent_cursor
+          ; offset = child_off
+          ; index_in_parent = i
+          ; children_mem = None
+          }
+      | Green.Token t ->
+        Token
+          { tc_green = t
+          ; tc_parent = parent_cursor
+          ; tc_offset = child_off
+          ; tc_index_in_parent = i
+          }
     in
     (* Seeded with child 0 to give [Array.make] an element; the loop then runs
        strictly left to right, as [off] requires. *)
@@ -463,11 +461,7 @@ let splice_children cache target ~at ~remove inserts =
          n);
   let inserts_arr = Array.of_list inserts in
   let ins = Array.length inserts_arr in
-  let child j =
-    match Green.nth_child g j with
-    | Some c -> c
-    | None -> assert false
-  in
+  let child j = Green.nth_child_exn g j in
   (* Read straight into the result. [Green.children_array] would copy every
      child into a private array that is then only read, and the kept ends would
      be copied again coming out of it. *)

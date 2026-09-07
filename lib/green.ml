@@ -21,6 +21,11 @@ let nth_child (n : node) i =
   if i < 0 || i >= Array.length cs then None else Some cs.(i)
 ;;
 
+(* [nth_child] without the option, for callers that have already bounded [i].
+   Raises [Invalid_argument] out of range, from the array access itself. The
+   option is one allocation per child, which the library's own sweeps over a
+   node's children have no use for. *)
+let nth_child_exn (n : node) i = n.Dedup.nd_children.(i)
 let children_array (n : node) = Array.copy n.Dedup.nd_children
 let tag (n : node) = n.Dedup.nd_tag
 let equal (a : node) (b : node) = a.Dedup.nd_tag = b.Dedup.nd_tag
