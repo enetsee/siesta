@@ -896,12 +896,62 @@ let test_parent_navigation () =
   | Syntax.Token _ -> Alcotest.fail "expected node child"
 ;;
 
+(* What is memoized is the cursors, not the array holding them. [children_array]
+   copies, so each call hands back its own array of the same cursors. *)
 let test_children_memoization () =
   let g = build_one_plus_one () in
   let r = Syntax.of_root g in
   let a = Syntax.children_array r in
   let b = Syntax.children_array r in
-  Helpers.same "Syntax.children memoizes the cursor array" a b
+  Helpers.distinct "each call gets its own array" a b;
+  Alcotest.(check int) "same length" (Array.length a) (Array.length b);
+  Array.iteri
+    (fun i x -> Helpers.same (Printf.sprintf "cursor %d is the memoized one" i) x b.(i))
+    a
+;;
+
+(* The array is the caller's, so scrambling it must leave the cursor alone.
+   Before the copy this reordered the memo itself, and [nth_child] answered from
+   the scrambled order ever after while each cursor still carried the
+   [index_in_parent] it was built with. *)
+let test_children_array_is_the_callers_copy () =
+  let g = build_one_plus_one () in
+  let r = Syntax.of_root g in
+  let kinds cs = Array.map Syntax.elem_kind cs in
+  let before = kinds (Syntax.children_array r) in
+  let cs = Syntax.children_array r in
+  let n = Array.length cs in
+  Alcotest.(check bool) "more than one child to scramble" true (n > 1);
+  for i = 0 to (n / 2) - 1 do
+    let tmp = cs.(i) in
+    cs.(i) <- cs.(n - 1 - i);
+    cs.(n - 1 - i) <- tmp
+  done;
+  Alcotest.(check (array int))
+    "a later children_array is still in source order"
+    before
+    (kinds (Syntax.children_array r));
+  Array.iteri
+    (fun i k ->
+       match Syntax.nth_child r i with
+       | None -> Alcotest.failf "child %d vanished" i
+       | Some e ->
+         Alcotest.(check int)
+           (Printf.sprintf "nth_child %d unchanged" i)
+           k
+           (Syntax.elem_kind e);
+         (match e with
+          | Syntax.Node c ->
+            Alcotest.(check int)
+              (Printf.sprintf "index_in_parent %d still agrees" i)
+              i
+              (Syntax.index_in_parent c)
+          | Syntax.Token tc ->
+            Alcotest.(check int)
+              (Printf.sprintf "token index_in_parent %d still agrees" i)
+              i
+              (Syntax.Token.index_in_parent tc)))
+    before
 ;;
 
 let test_equal_vs_same_tree () =
@@ -1249,6 +1299,10 @@ let () =
         ; Alcotest.test_case "text_range" `Quick test_text_range
         ; Alcotest.test_case "parent navigation" `Quick test_parent_navigation
         ; Alcotest.test_case "children memoization" `Quick test_children_memoization
+        ; Alcotest.test_case
+            "children_array is the caller's copy"
+            `Quick
+            test_children_array_is_the_callers_copy
         ; Alcotest.test_case "equal vs same_tree" `Quick test_equal_vs_same_tree
         ; Alcotest.test_case "replace off-spine share" `Quick test_replace_off_spine_share
         ; Alcotest.test_case "replace at root" `Quick test_replace_at_root

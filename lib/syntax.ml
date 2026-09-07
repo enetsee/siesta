@@ -108,7 +108,12 @@ let ensure_children t =
     c
 ;;
 
-let children_array t = ensure_children t
+(* Copy. Without it the caller holds the memo itself, and reordering or editing
+   it leaves [nth_child] and [preorder] disagreeing with the green child order,
+   and each cursor's [index_in_parent] disagreeing with its own slot, for the
+   life of the cursor. The elements are shared, so the cursor identities 
+   [nth_child] hands back are unaffected. *)
+let children_array t = Array.copy (ensure_children t)
 
 let nth_child t i =
   let cs = ensure_children t in

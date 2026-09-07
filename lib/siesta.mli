@@ -428,7 +428,12 @@ module Syntax : sig
       {!of_root} call). *)
   val same_tree : t -> t -> bool
 
+  (** [children_array t] is a fresh copy of [t]'s children, safe to mutate. The
+      cursors inside it are the memoized ones, so they stay physically equal to
+      what {!nth_child} and a later [children_array] return; it is the array
+      holding them that is copied. *)
   val children_array : t -> elem array
+
   val nth_child : t -> int -> elem option
   val to_source : t -> string
   val pp : Format.formatter -> t -> unit
