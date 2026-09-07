@@ -240,7 +240,12 @@ module Green : sig
 
       The node takes its own copy of [children], so the array passed in stays
       free to mutate afterwards. Read, modify and rebuild over one buffer from
-      {!children_array} is therefore safe to repeat. *)
+      {!children_array} is therefore safe to repeat.
+
+      That covers nodes built through this function. {!Siesta.Dedup} re-exports
+      the record itself, [nd_children] included, so writing through a node
+      obtained there still corrupts the table it was interned in. That module is
+      for driving the tables from the test suite and carries no guarantees. *)
   val mk_node
     :  Cache.t
     -> kind:int

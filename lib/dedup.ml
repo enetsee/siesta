@@ -112,11 +112,25 @@ let min_buckets = 16
 (* Resize once the average bucket would hold more than [load] entries. *)
 let load = 2
 
+(* Widths are powers of two, so [bucket_index] can mask instead of dividing.
+   [rehash] only ever doubles or keeps, so rounding up here is what makes that
+   hold for the life of the table. *)
+let rec round_up_pow2 n acc = if acc >= n then acc else round_up_pow2 n (acc * 2)
+
+(* The largest power of two an [Array.make] will take, which is where the
+   doubling has to stop. *)
+let max_buckets =
+  let rec go acc =
+    if acc * 2 > Sys.max_array_length || acc * 2 <= 0 then acc else go (acc * 2)
+  in
+  go 1
+;;
+
 (* Every bucket slot starts out pointing at one shared empty weak array, which
    saves [n] allocations up front. Safe because [bucket_put] replaces an empty
    bucket wholesale. *)
 let make_table capacity =
-  let n = if capacity < min_buckets then min_buckets else capacity in
+  let n = if capacity < min_buckets then min_buckets else round_up_pow2 capacity 1 in
   { buckets = Array.make n (Weak.create 0); size = 0 }
 ;;
 
@@ -125,7 +139,10 @@ let clear_table t =
   t.size <- 0
 ;;
 
-let bucket_index hkey n = hkey land max_int mod n
+(* [n] is a power of two, so the mask both wraps into range and drops the sign
+   bit, and the division a [mod] would compile to goes away. This runs on every
+   probe and on every entry moved during a rehash. *)
+let bucket_index hkey n = hkey land (n - 1)
 let grow_cap cap = min (if cap = 0 then 2 else cap * 2) (Sys.max_array_length - 1)
 
 (* Add [v] to bucket [i], reusing a slot the GC has vacated if there is one and
@@ -174,27 +191,36 @@ let table_stats t =
 let rehash t index_of =
   let old = t.buckets in
   let n = Array.length old in
-  (* Collect the survivors first, since [t.size] counts inserts and the live
-     count is what decides the width. Held strongly for the rebuild only. *)
-  let live = ref [] in
+  (* Count the survivors first: [t.size] counts inserts, and it is the live
+     count that decides the width. Counting rather than collecting keeps this
+     free, where a list of the survivors costs a cons apiece. *)
   let count = ref 0 in
+  Array.iter
+    (fun b ->
+       for j = 0 to Weak.length b - 1 do
+         if Weak.check b j then incr count
+       done)
+    old;
+  (* Grow under real load, otherwise rebuild at the same width, which still
+     drops the dead entries and reclaims the bucket arrays [bucket_put] grew. *)
+  let n' = if !count > load * n then min (n * 2) max_buckets else n in
+  let fresh = Array.make n' (Weak.create 0) in
+  (* Second pass places them. Nothing pins the survivors between the passes, so
+     an entry counted above can be gone by now; what lands in [fresh] is what
+     the next resize decision should be reading, hence the recount. *)
+  let placed = ref 0 in
   Array.iter
     (fun b ->
        for j = 0 to Weak.length b - 1 do
          match Weak.get b j with
          | Some v ->
-           live := v :: !live;
-           incr count
+           bucket_put fresh (index_of v n') v;
+           incr placed
          | None -> ()
        done)
     old;
-  (* Grow under real load, otherwise rebuild at the same width, which still
-     drops the dead entries and reclaims the bucket arrays [bucket_put] grew. *)
-  let n' = if !count > load * n then min (n * 2) (Sys.max_array_length - 1) else n in
-  let fresh = Array.make n' (Weak.create 0) in
-  List.iter (fun v -> bucket_put fresh (index_of v n') v) !live;
   t.buckets <- fresh;
-  t.size <- !count
+  t.size <- !placed
 ;;
 
 (* ---- token table --------------------------------------------------------- *)
@@ -205,18 +231,25 @@ let token_create ?(capacity = 256) () : token_t = make_table capacity
 let token_clear (t : token_t) = clear_table t
 let token_stats (t : token_t) = table_stats t
 
+(* [Weak.get] allocates an option per slot examined and there is no reading a
+   weak slot without it, so the hit is stored as the very block it handed back
+   ([as hit]) rather than rebuilt with a second [Some]. The loop stops on a bool
+   rather than [Option.is_none], which is a call per turn: neither ref survives
+   into the generated code, but the call would have. *)
 let token_intern (t : token_t) ~kind ~text : token =
   let n = Array.length t.buckets in
   let i = bucket_index (token_hash ~kind ~text) n in
   let b = t.buckets.(i) in
   let cap = Weak.length b in
   let found = ref None in
+  let searching = ref true in
   let j = ref 0 in
-  while Option.is_none !found && !j < cap do
-    (match Weak.get b !j with
-     | Some e when e.tk_kind = kind && String.equal e.tk_text text -> found := Some e
-     | _ -> ());
-    incr j
+  while !searching && !j < cap do
+    match Weak.get b !j with
+    | Some e as hit when e.tk_kind = kind && String.equal e.tk_text text ->
+      found := hit;
+      searching := false
+    | _ -> incr j
   done;
   match !found with
   | Some e -> e
@@ -260,18 +293,21 @@ let node_matches (e : node) ~kind ~text_len ~payload children =
   && same_children e.nd_children children
 ;;
 
+(* Probes as [token_intern] does, and for the same reason. *)
 let node_intern (t : node_t) ~kind ~text_len ~payload (children : child array) : node =
   let n = Array.length t.buckets in
   let i = bucket_index (node_hash ~kind ~text_len ~payload children) n in
   let b = t.buckets.(i) in
   let cap = Weak.length b in
   let found = ref None in
+  let searching = ref true in
   let j = ref 0 in
-  while Option.is_none !found && !j < cap do
-    (match Weak.get b !j with
-     | Some e when node_matches e ~kind ~text_len ~payload children -> found := Some e
-     | _ -> ());
-    incr j
+  while !searching && !j < cap do
+    match Weak.get b !j with
+    | Some e as hit when node_matches e ~kind ~text_len ~payload children ->
+      found := hit;
+      searching := false
+    | _ -> incr j
   done;
   match !found with
   | Some e -> e

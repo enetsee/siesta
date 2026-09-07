@@ -270,15 +270,20 @@ let descendants t =
 
 (* -- pointers -------------------------------------------------------------- *)
 
-(* Indices from root down to [t], inclusive of [t.index_in_parent]. *)
-let path_from_root t =
+(* Indices from root down to [t], inclusive of [t.index_in_parent]. Built by
+   consing from the leaf up, so [acc] is where a token's own index goes: it
+   belongs on the end of the path, and seeding it here costs nothing where
+   appending it afterwards copies the whole list. *)
+let path_from_root_onto acc t =
   let rec loop acc cur =
     match cur.parent with
     | None -> acc
     | Some p -> loop (cur.index_in_parent :: acc) p
   in
-  loop [] t
+  loop acc t
 ;;
+
+let path_from_root t = path_from_root_onto [] t
 
 module Ptr = struct
   (* Bind the outer node cursor before [t] below shadows it. *)
@@ -294,7 +299,7 @@ module Ptr = struct
   ;;
 
   let of_token tc =
-    { path = Array.of_list (path_from_root tc.tc_parent @ [ tc.tc_index_in_parent ])
+    { path = Array.of_list (path_from_root_onto [ tc.tc_index_in_parent ] tc.tc_parent)
     ; kind = Green.Token.kind tc.tc_green
     }
   ;;
