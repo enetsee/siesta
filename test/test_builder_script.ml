@@ -86,14 +86,17 @@ type frame =
   ; f_payload : int
   ; f_gen : int
   ; mutable f_items : shape list (* reversed *)
-  ; mutable f_lowest_wrap : int
-    (* leftmost position wrapped at, else max_int *)
-    (* Mirrors [Builder.frame.lowest_wrap]; see [step]'s [Start_at]. *)
   }
 
 type mark =
   { m_gen : int
   ; m_pos : int
+  ; mutable m_dead : bool
+    (* Set by the wrap that strands this mark; see [step]'s [Start_at]. Kept on
+       the mark rather than derived from a position on the frame because
+       position cannot tell the two cases apart: a wrap at [p] leaves the frame
+       [p + 1] items long, so a mark it stranded and a mark taken straight
+       afterwards both sit at [p + 1]. *)
   }
 
 type model =
@@ -114,14 +117,7 @@ let fresh_gen m =
 let step m = function
   | Start (k, p) ->
     if Option.is_some m.root then raise Illegal;
-    m.stack
-    <- { f_kind = k
-       ; f_payload = p
-       ; f_gen = fresh_gen m
-       ; f_items = []
-       ; f_lowest_wrap = max_int
-       }
-       :: m.stack
+    m.stack <- { f_kind = k; f_payload = p; f_gen = fresh_gen m; f_items = [] } :: m.stack
   | Tok (k, t) ->
     (match m.stack with
      | [] -> raise Illegal
@@ -139,7 +135,9 @@ let step m = function
     (match m.stack with
      | [] -> raise Illegal
      | top :: _ ->
-       m.marks <- m.marks @ [ { m_gen = top.f_gen; m_pos = List.length top.f_items } ])
+       m.marks
+       <- m.marks
+          @ [ { m_gen = top.f_gen; m_pos = List.length top.f_items; m_dead = false } ])
   | Start_at (i, k, p) ->
     (match m.stack with
      | [] -> raise Illegal
@@ -148,25 +146,27 @@ let step m = function
        let cp = List.nth m.marks (i mod List.length m.marks) in
        if top.f_gen <> cp.m_gen then raise Illegal;
        let have = List.length top.f_items in
-       (* A wrap at [p] swallows every item from [p] on, so it invalidates
-          exactly this frame's marks taken further right. Derived from what a
-          checkpoint means; the [m_pos > have] rule it replaces came from the
-          builder's own heuristic, and a model copying the implementation is
-          blind to that implementation missing. *)
-       if cp.m_pos > top.f_lowest_wrap || cp.m_pos > have then raise Illegal;
-       if cp.m_pos < top.f_lowest_wrap then top.f_lowest_wrap <- cp.m_pos;
+       (* A mark means "the items from here on are the ones that were here when
+          I was taken". A [Start_at] at [p] swallows every item from [p] on, so
+          it strands exactly this frame's marks that are further right *and had
+          already been taken*; a mark taken afterwards describes the frame as
+          that [Start_at] left it and is untouched.
+
+          Written as an effect on the marks, which is the rule itself. Deriving
+          it from a number on the frame is what both previous versions did, and
+          both lost the "had already been taken" half. A model that borrows the
+          implementation's shortcut cannot see the implementation miss. *)
+       if cp.m_dead || cp.m_pos > have then raise Illegal;
+       List.iter
+         (fun mk -> if mk.m_gen = top.f_gen && mk.m_pos > cp.m_pos then mk.m_dead <- true)
+         m.marks;
        (* The trailing [have - m_pos] items move into the new frame. *)
        let items = List.rev top.f_items in
        let keep = List.filteri (fun j _ -> j < cp.m_pos) items in
        let moved = List.filteri (fun j _ -> j >= cp.m_pos) items in
        top.f_items <- List.rev keep;
        m.stack
-       <- { f_kind = k
-          ; f_payload = p
-          ; f_gen = fresh_gen m
-          ; f_items = List.rev moved
-          ; f_lowest_wrap = max_int
-          }
+       <- { f_kind = k; f_payload = p; f_gen = fresh_gen m; f_items = List.rev moved }
           :: m.stack)
 ;;
 
@@ -197,9 +197,7 @@ let legal_options m =
     let reuses =
       List.mapi (fun i cp -> i, cp) m.marks
       |> List.filter (fun (_, cp) ->
-        cp.m_gen = top.f_gen
-        && cp.m_pos <= List.length top.f_items
-        && cp.m_pos <= top.f_lowest_wrap)
+        cp.m_gen = top.f_gen && (not cp.m_dead) && cp.m_pos <= List.length top.f_items)
       |> List.map (fun (i, _) -> `Start_at i)
     in
     [ `Start; `Tok; `Finish; `Mark ] @ reuses
@@ -452,8 +450,7 @@ let test_script_census () =
           match m.stack, e with
           | top :: _, Start_at (i, _, _) when m.marks <> [] ->
             let cp = List.nth m.marks (i mod List.length m.marks) in
-            top.f_gen = cp.m_gen
-            && (cp.m_pos > top.f_lowest_wrap || cp.m_pos > List.length top.f_items)
+            top.f_gen = cp.m_gen && (cp.m_dead || cp.m_pos > List.length top.f_items)
           | [], _ | _ :: _, (Start _ | Tok _ | Finish | Mark | Start_at _) -> false
         in
         (match step m e with

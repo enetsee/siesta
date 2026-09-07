@@ -152,14 +152,31 @@ Builder.finish_node b;                 (* → BIN(1, +, 2) *)
 ```
 
 Reusing the same `cp` for each operator builds `1+2+3` as `BIN(BIN(1,+,2),+,3)`.
-Checkpoints are bound to their frame: using one after that frame has closed, or
-after a deeper frame was pushed on top, raises `Failure` rather than silently
-wrapping the wrong children. So does using one that an earlier checkpoint from
-the same frame has since swallowed, because that wrap took everything from the
-earlier position onwards and the later checkpoint now addresses whatever has
-landed at its offset since. The
-emitters raise `Failure` on misuse too (wrong nesting, token before any node,
-finish with open frames, use after `finish`).
+
+Checkpoints are bound to their builder and their frame: using one on a different
+builder, after its frame has closed, or after a deeper frame was pushed on top,
+raises `Failure` rather than silently wrapping the wrong children. So does using
+one that has been *stranded*, which means an earlier `start_node_at` to its left
+ran after it was taken: that call swallowed the children it addressed, so it now
+addresses whatever has landed at its offset since.
+
+The "after it was taken" half is not decoration. A checkpoint taken *after* an
+earlier `start_node_at` is good however far left that call was, so the other
+common shape works too — a flat list of items, one checkpoint per item, each
+wrapped as its item finishes:
+
+```ocaml
+List.iter
+  (fun item ->
+     let cp = Builder.checkpoint b in
+     emit_item b item;
+     Builder.start_node_at b cp k_item;
+     Builder.finish_node b)
+  items
+```
+
+The emitters raise `Failure` on misuse too (wrong nesting, token before any
+node, finish with open frames, use after `finish`).
 
 ### Syntax: navigating and editing
 

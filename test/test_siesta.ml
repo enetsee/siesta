@@ -528,11 +528,14 @@ let test_builder_cache_accessor () =
    rule is that a wrap at [p] invalidates the checkpoints of that frame with
    [pos > p], whatever the buffer length says. *)
 
-let msg_says_stale msg =
-  let n = String.length msg in
-  let rec has i = i + 5 <= n && (String.sub msg i 5 = "stale" || has (i + 1)) in
+let msg_contains msg sub =
+  let n = String.length msg
+  and k = String.length sub in
+  let rec has i = i + k <= n && (String.sub msg i k = sub || has (i + 1)) in
   has 0
 ;;
+
+let msg_says_stale msg = msg_contains msg "stale"
 
 (* Refilled past [cp2.pos] after the wrap, so the position is in range again and
    points at children that arrived later. Reusing it wrapped "p q" rather than
@@ -582,6 +585,91 @@ let test_checkpoint_stale_reuse_at_exact_end () =
       (Printf.sprintf "rejected as stale, not by the gen guard (got %S)" msg)
       true
       (msg_says_stale msg)
+;;
+
+(* The two tests above ask the guard to reject. This one asks it to accept, and
+   a guard keyed on position alone cannot do both: a [start_node_at] at [p]
+   leaves the frame [p + 1] long, so a checkpoint it stranded and a checkpoint
+   taken straight afterwards sit at the same offset. Only "was it taken before
+   or after that call" separates them.
+
+   The shape is the ordinary flat item list, one checkpoint per item, each
+   wrapped as its item finishes. Every checkpoint after the first is taken after
+   an earlier [start_node_at] further left, so rejecting those closes the frame
+   to every later checkpoint the moment the first one runs. *)
+let test_checkpoint_taken_after_an_earlier_reuse_still_wraps () =
+  let b = Builder.create () in
+  Builder.start_node b K.root;
+  List.iter
+    (fun text ->
+       let cp = Builder.checkpoint b in
+       Builder.token b K.int_lit text;
+       Builder.start_node_at b cp K.chain;
+       Builder.finish_node b)
+    [ "a"; "b"; "c" ];
+  Builder.finish_node b;
+  let root = Builder.finish b in
+  Alcotest.(check string) "every item survives" "abc" (Green.to_source root);
+  Alcotest.(check string)
+    "one wrapper per item, none nested"
+    "(K20\n  (K30\n    (K1 \"a\"))\n  (K30\n    (K1 \"b\"))\n  (K30\n    (K1 \"c\")))"
+    (Format.asprintf "%a" Green.pp root)
+;;
+
+(* Staleness is not settled by the leftmost [start_node_at] either. Here the
+   leftmost is at 0 and ran before [cp_c] was taken, so it says nothing about
+   it; the call that strands [cp_c] is the later one at 1, to the *right* of
+   that leftmost. A guard that stamps a checkpoint with the frame's leftmost
+   position at capture and watches for it to move would accept this. *)
+let test_checkpoint_stale_by_a_reuse_right_of_the_leftmost () =
+  let b = Builder.create () in
+  Builder.start_node b K.root;
+  let cp_a = Builder.checkpoint b in
+  Builder.token b K.int_lit "a";
+  Builder.start_node_at b cp_a K.chain;
+  Builder.finish_node b;
+  (* The leftmost position started at is now 0, and both checkpoints below
+     postdate it. *)
+  let cp_b = Builder.checkpoint b in
+  Builder.token b K.int_lit "b";
+  let cp_c = Builder.checkpoint b in
+  Builder.token b K.int_lit "c";
+  (* Starting a node at [cp_b] swallows what [cp_c] was taken to address. *)
+  Builder.start_node_at b cp_b K.bin_expr;
+  Builder.finish_node b;
+  try
+    Builder.start_node_at b cp_c K.bin_expr;
+    Alcotest.fail "checkpoint stranded by a later start_node_at must be rejected"
+  with
+  | Failure msg ->
+    Alcotest.(check bool)
+      (Printf.sprintf "rejected as stale, not by the gen guard (got %S)" msg)
+      true
+      (msg_says_stale msg)
+;;
+
+(* Frame gens count from zero in every builder, so frame [n] of two builders
+   carries the same number. Without the builder's own identity on the
+   checkpoint, the gen guard passes and the wrap lands on a span chosen by the
+   other builder's buffer. *)
+let test_checkpoint_rejected_from_another_builder () =
+  let a = Builder.create () in
+  Builder.start_node a K.root;
+  Builder.token a K.int_lit "aaa";
+  let cp_a = Builder.checkpoint a in
+  let b = Builder.create () in
+  Builder.start_node b K.root;
+  Builder.token b K.int_lit "x";
+  Builder.token b K.int_lit "y";
+  try
+    Builder.start_node_at b cp_a K.bin_expr;
+    Alcotest.fail "checkpoint from another builder must be rejected"
+  with
+  | Failure msg ->
+    Alcotest.(check bool)
+      (Printf.sprintf "rejected as foreign, not as stale (got %S)" msg)
+      true
+      (msg_contains msg "another builder")
 ;;
 
 (* The other order still works. A checkpoint taken later and used before any
@@ -1132,6 +1220,18 @@ let () =
             "checkpoint stale reuse at exact end"
             `Quick
             test_checkpoint_stale_reuse_at_exact_end
+        ; Alcotest.test_case
+            "checkpoint taken after an earlier reuse still wraps"
+            `Quick
+            test_checkpoint_taken_after_an_earlier_reuse_still_wraps
+        ; Alcotest.test_case
+            "checkpoint stale by a reuse right of the leftmost"
+            `Quick
+            test_checkpoint_stale_by_a_reuse_right_of_the_leftmost
+        ; Alcotest.test_case
+            "checkpoint rejected from another builder"
+            `Quick
+            test_checkpoint_rejected_from_another_builder
         ; Alcotest.test_case
             "checkpoint inner-first still wraps"
             `Quick

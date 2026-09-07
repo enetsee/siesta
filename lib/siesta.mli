@@ -275,9 +275,10 @@ module Builder : sig
   type t = Builder.t
 
   (** A position in the open node's child list, taken by {!val-checkpoint} for
-      use with {!start_node_at}. It carries the frame it came from, so passing
-      it on once that frame has finished, or once a deeper frame sits on top of
-      it, raises [Failure]. *)
+      use with {!start_node_at}. It carries the builder and the frame it came
+      from, and the moment it was taken. Passing it to a different builder, or
+      using it once its frame has finished or a deeper frame sits on top of it,
+      raises [Failure]. *)
   type checkpoint = Builder.checkpoint
 
   (** [create ?cache ?initial_children_capacity ()] starts a fresh builder. When
@@ -331,13 +332,41 @@ module Builder : sig
       left-associative idiom: capture once at the start of the LHS, then wrap
       each time you see an operator.
 
-      Raises [Failure] if [cp] came from a frame that is no longer the open one,
-      whether closed or buried under a deeper [start_node]. Raises too if an
-      {i earlier} checkpoint from the same frame has been reused since, because
-      that wrap took everything from the earlier position onwards and [cp] now
-      addresses whatever has landed at its offset since. That holds however many
-      children have refilled the buffer past it. Reusing one checkpoint
-      repeatedly is fine; interleaving two from the same frame works
+      Raises [Failure] if [cp] came from a different builder, or from a frame
+      that is no longer the open one, whether closed or buried under a deeper
+      [start_node].
+
+      Raises too if [cp] has been stranded, which means precisely this: an
+      earlier [start_node_at] {i left of} [cp]'s position ran {i after} [cp] was
+      taken. That call took everything from its own position onwards, so the
+      children [cp] addressed sit inside the node it opened and [cp] addresses
+      whatever has landed at its offset since. That holds however many children
+      have refilled the buffer past it.
+
+      Both halves of the rule carry weight, and dropping either one is a real
+      bug rather than conservatism:
+
+      - a [start_node_at] at or {i right of} [cp]'s position leaves [cp] good.
+        It repackages children [cp] already addressed, and [cp] goes on
+        addressing them. This is what makes reuse work.
+      - a checkpoint taken {i after} a [start_node_at] is good however far left
+        that call was, because it recorded the buffer as that call left it. This
+        is what makes a flat list of items work, one checkpoint per item:
+
+      {[
+        List.iter
+          (fun item ->
+             let cp = Builder.checkpoint b in
+             emit_item b item;
+             Builder.start_node_at b cp k_item;
+             Builder.finish_node b)
+          items
+      ]}
+
+      Position alone cannot tell those two apart: a [start_node_at] at [p]
+      leaves the buffer [p + 1] long, so a checkpoint it stranded and a
+      checkpoint taken straight afterwards both sit at [p + 1]. Reusing one
+      checkpoint repeatedly is fine; interleaving two from the same frame works
       innermost-last. *)
   val start_node_at : t -> ?payload:int -> checkpoint -> int -> unit
 end
