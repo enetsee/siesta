@@ -25,6 +25,7 @@ type token_t
 
 val token_create : ?capacity:int -> unit -> token_t
 val token_intern : token_t -> kind:int -> text:string -> token
+val token_intern_slice : token_t -> kind:int -> src:string -> pos:int -> len:int -> token
 val token_clear : token_t -> unit
 
 type node_t

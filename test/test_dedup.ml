@@ -30,6 +30,49 @@ let test_token_distinctness () =
   Helpers.distinct "distinct token not shared (kind)" a c
 ;;
 
+(* -- interning from a slice ------------------------------------------------ *)
+
+(* The claim the slice path rests on: for the same bytes it answers the same
+   token as the whole-string path, whichever ran first. If the hash or the
+   equality read a range differently from the way they read a string, a lexer
+   holding offsets would build a second record for text the table already had,
+   and the sharing would quietly stop. *)
+let test_token_slice_agrees () =
+  let src = "  let x = let  " in
+  let t = Siesta.Dedup.token_create () in
+  let whole = Siesta.Dedup.token_intern t ~kind:1 ~text:"let" in
+  let slice = Siesta.Dedup.token_intern_slice t ~kind:1 ~src ~pos:2 ~len:3 in
+  Helpers.same "slice finds what the string interned" whole slice;
+  let later = Siesta.Dedup.token_intern_slice t ~kind:1 ~src ~pos:10 ~len:3 in
+  Helpers.same "the same bytes elsewhere in the source" whole later;
+  (* And the other way round: the slice path inserts, the string path finds. *)
+  let t2 = Siesta.Dedup.token_create () in
+  let first = Siesta.Dedup.token_intern_slice t2 ~kind:1 ~src ~pos:2 ~len:3 in
+  let found = Siesta.Dedup.token_intern t2 ~kind:1 ~text:"let" in
+  Helpers.same "string finds what the slice interned" first found;
+  Siesta.Dedup.(Alcotest.(check string) "text is cut from the source" "let" first.tk_text)
+;;
+
+let test_token_slice_distinctness () =
+  let src = "abcd" in
+  let t = Siesta.Dedup.token_create () in
+  let a = Siesta.Dedup.token_intern_slice t ~kind:1 ~src ~pos:0 ~len:2 in
+  let b = Siesta.Dedup.token_intern_slice t ~kind:1 ~src ~pos:1 ~len:2 in
+  let c = Siesta.Dedup.token_intern_slice t ~kind:1 ~src ~pos:0 ~len:3 in
+  let d = Siesta.Dedup.token_intern_slice t ~kind:2 ~src ~pos:0 ~len:2 in
+  Helpers.distinct "a different offset is a different token" a b;
+  Helpers.distinct "a prefix is not the longer text" a c;
+  Helpers.distinct "a different kind is a different token" a d
+;;
+
+(* A slice of nothing is the empty text, wherever in the source it is taken. *)
+let test_token_slice_empty () =
+  let t = Siesta.Dedup.token_create () in
+  let a = Siesta.Dedup.token_intern t ~kind:3 ~text:"" in
+  let b = Siesta.Dedup.token_intern_slice t ~kind:3 ~src:"abc" ~pos:2 ~len:0 in
+  Helpers.same "empty slice is the empty text" a b
+;;
+
 (* -- idempotence + distinctness (node) ------------------------------------- *)
 
 let test_node_idempotence () =
@@ -276,6 +319,9 @@ let () =
       , [ Alcotest.test_case "idempotence" `Quick test_token_idempotence
         ; Alcotest.test_case "distinctness" `Quick test_token_distinctness
         ; Alcotest.test_case "empty text" `Quick test_empty_token
+        ; Alcotest.test_case "slice agrees" `Quick test_token_slice_agrees
+        ; Alcotest.test_case "slice distinctness" `Quick test_token_slice_distinctness
+        ; Alcotest.test_case "slice of nothing" `Quick test_token_slice_empty
         ] )
     ; ( "nodes"
       , [ Alcotest.test_case "idempotence" `Quick test_node_idempotence

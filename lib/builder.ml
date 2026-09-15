@@ -97,6 +97,17 @@ let token t kind text =
     else failwith "Builder.token: no node started"
 ;;
 
+let token_slice t kind src pos len =
+  match t.stack with
+  | _ :: _ ->
+    let tok = Green.mk_token_slice t.cache ~kind ~src ~pos ~len in
+    Dynarray.add_last t.children (Green.Token tok)
+  | [] ->
+    if Option.is_some t.root
+    then failwith "Builder.token_slice: tree already finished"
+    else failwith "Builder.token_slice: no node started"
+;;
+
 (* Lift a closing frame's children off the shared buffer as an array of their
    own, ready for a green node. *)
 let pop_children_array t (children_start : int) : Green.child array =

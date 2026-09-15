@@ -45,6 +45,10 @@ let child_text_len = function
 let sum_text_len cs = Array.fold_left (fun acc c -> acc + child_text_len c) 0 cs
 let mk_token cache ~kind ~text = Cache.hashcons_token cache ~kind ~text
 
+let mk_token_slice cache ~kind ~src ~pos ~len =
+  Cache.hashcons_token_slice cache ~kind ~src ~pos ~len
+;;
+
 let mk_node cache ~kind ?(payload = 0) ~children () =
   let text_len = sum_text_len children in
   Cache.hashcons_node cache ~kind ~text_len ~payload children

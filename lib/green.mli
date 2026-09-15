@@ -33,6 +33,7 @@ module Token : sig
 end
 
 val mk_token : Cache.t -> kind:int -> text:string -> token
+val mk_token_slice : Cache.t -> kind:int -> src:string -> pos:int -> len:int -> token
 val mk_node : Cache.t -> kind:int -> ?payload:int -> children:child array -> unit -> node
 val child_text_len : child -> int
 val sum_text_len : child array -> int

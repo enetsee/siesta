@@ -85,7 +85,32 @@ let[@inline] child_key = function
   | Token t -> (t.tk_tag lsl 1) lor 1
 ;;
 
+(* The same fold over a range of a string, for interning a token whose text is
+   still a slice of the source. It has to agree with [hash_string] byte for
+   byte, or a token interned one way would miss one interned the other. *)
+let[@inline] hash_slice h s pos len =
+  let acc = ref h in
+  for i = pos to pos + len - 1 do
+    acc := mix !acc (Char.code (String.unsafe_get s i))
+  done;
+  !acc
+;;
+
 let token_hash ~kind ~text = hash_string (mix 0 kind) text
+let token_hash_slice ~kind ~src ~pos ~len = hash_slice (mix 0 kind) src pos len
+
+(* [String.equal] against a slice, without cutting the slice out first. *)
+let[@inline] slice_equal (text : string) (src : string) pos len =
+  String.length text = len
+  &&
+  let same = ref true in
+  let i = ref 0 in
+  while !same && !i < len do
+    if String.unsafe_get text !i <> String.unsafe_get src (pos + !i) then same := false;
+    incr i
+  done;
+  !same
+;;
 
 let node_hash ~kind ~text_len ~payload children =
   let acc = ref (mix (mix (mix 0 kind) text_len) payload) in
@@ -255,6 +280,43 @@ let token_intern (t : token_t) ~kind ~text : token =
   | Some e -> e
   | None ->
     let e = { tk_tag = fresh_tag (); tk_kind = kind; tk_text = text } in
+    bucket_put t.buckets i e;
+    t.size <- t.size + 1;
+    if t.size > load * n
+    then
+      rehash t (fun (v : token) m ->
+        bucket_index (token_hash ~kind:v.tk_kind ~text:v.tk_text) m);
+    e
+;;
+
+(* The same probe over a slice of a source string. Where the text is already
+   interned — which is most tokens of most files, since a keyword, a space or a
+   repeated identifier all land here — nothing is allocated at all: the hash
+   and the comparison both read the bytes where they lie. [String.sub] runs on
+   a miss, and only then.
+
+   Interning through this and through {!token_intern} answer the same token for
+   the same bytes. The hash and the equality are the same two functions reading
+   a range instead of a whole string. *)
+let token_intern_slice (t : token_t) ~kind ~src ~pos ~len : token =
+  let n = Array.length t.buckets in
+  let i = bucket_index (token_hash_slice ~kind ~src ~pos ~len) n in
+  let b = t.buckets.(i) in
+  let cap = Weak.length b in
+  let found = ref None in
+  let searching = ref true in
+  let j = ref 0 in
+  while !searching && !j < cap do
+    match Weak.get b !j with
+    | Some e as hit when e.tk_kind = kind && slice_equal e.tk_text src pos len ->
+      found := hit;
+      searching := false
+    | _ -> incr j
+  done;
+  match !found with
+  | Some e -> e
+  | None ->
+    let e = { tk_tag = fresh_tag (); tk_kind = kind; tk_text = String.sub src pos len } in
     bucket_put t.buckets i e;
     t.size <- t.size + 1;
     if t.size > load * n

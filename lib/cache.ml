@@ -59,6 +59,18 @@ let hashcons_token (t : t) ~kind ~text : Dedup.token =
   | Plain -> Dedup.{ tk_tag = fresh_tag (); tk_kind = kind; tk_text = text }
 ;;
 
+(* The slice never becomes a string in Hashconsed mode unless it is new. Plain
+   mode has no table to look in, so it cuts the slice out and allocates, which
+   is what it does for a whole string too. *)
+let hashcons_token_slice (t : t) ~kind ~src ~pos ~len : Dedup.token =
+  match t with
+  | Hashconsed { tokens; _ } -> Dedup.token_intern_slice tokens ~kind ~src ~pos ~len
+  | Synchronized { lock; tokens; _ } ->
+    Mutex.protect lock (fun () -> Dedup.token_intern_slice tokens ~kind ~src ~pos ~len)
+  | Plain ->
+    Dedup.{ tk_tag = fresh_tag (); tk_kind = kind; tk_text = String.sub src pos len }
+;;
+
 let hashcons_node (t : t) ~kind ~text_len ~payload (children : Dedup.child array)
   : Dedup.node
   =

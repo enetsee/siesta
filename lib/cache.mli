@@ -14,6 +14,16 @@ val create_plain : unit -> t
     every call allocates. Public callers go through {!Green.mk_token}. *)
 val hashcons_token : t -> kind:int -> text:string -> Dedup.token
 
+(** The same, for text that is still a slice of a larger string. Public callers
+    go through {!Green.mk_token_slice}. *)
+val hashcons_token_slice
+  :  t
+  -> kind:int
+  -> src:string
+  -> pos:int
+  -> len:int
+  -> Dedup.token
+
 (** Not re-exported by {!Siesta.Cache}. Splits on Hashconsed and Plain exactly
     as {!hashcons_token} does. Public callers go through {!Green.mk_node}. *)
 val hashcons_node

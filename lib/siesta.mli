@@ -35,6 +35,19 @@ module Dedup : sig
 
   val token_create : ?capacity:int -> unit -> token_t
   val token_intern : token_t -> kind:int -> text:string -> token
+
+  (** [token_intern_slice t ~kind ~src ~pos ~len] interns the token whose text
+      is [String.sub src pos len], hashing and comparing the bytes where they
+      lie. It answers what {!token_intern} answers for the same bytes, and cuts
+      the substring out only where the token is new. *)
+  val token_intern_slice
+    :  token_t
+    -> kind:int
+    -> src:string
+    -> pos:int
+    -> len:int
+    -> token
+
   val token_clear : token_t -> unit
 
   (** {2 Node table} *)
@@ -234,6 +247,19 @@ module Green : sig
 
   val mk_token : Cache.t -> kind:int -> text:string -> token
 
+  (** The same token, named by a slice of a string rather than by a string.
+
+      A lexer holds its tokens as offsets into the source it read, and the text
+      of most of them is text the table already has: a keyword, a run of
+      spaces, an identifier that occurs twice. Cutting the substring out to ask
+      allocates a string per token and throws away all but the first of each.
+      This hashes and compares the bytes where they lie, and calls [String.sub]
+      only where the token is new.
+
+      Answers what {!mk_token} answers for the same bytes. In Plain mode there
+      is no table to look in, so it allocates as {!mk_token} does. *)
+  val mk_token_slice : Cache.t -> kind:int -> src:string -> pos:int -> len:int -> token
+
   (** [mk_node cache ~kind ?payload ~children ()] builds a node whose [text_len]
       is computed by summing the lengths of [children]. [?payload] defaults to
       0; see {!payload} for semantics.
@@ -312,6 +338,11 @@ module Builder : sig
   val start_node : t -> ?payload:int -> int -> unit
 
   val token : t -> int -> string -> unit
+
+  (** [token_slice t kind src pos len] is {!token} on [String.sub src pos len],
+      without cutting the substring out. See {!Green.mk_token_slice}. *)
+  val token_slice : t -> int -> string -> int -> int -> unit
+
   val finish_node : t -> unit
 
   (** Pops the root. Raises [Failure] if frames are still open, or if no node was
