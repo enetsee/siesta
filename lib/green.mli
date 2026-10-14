@@ -19,8 +19,7 @@ val num_children : node -> int
 val nth_child : node -> int -> child option
 
 (** [nth_child] without the option, for callers that have already bounded the
-    index. Raises [Invalid_argument] out of range. Not re-exported by
-    {!Siesta.Green}. *)
+    index. Raises [Invalid_argument] out of range. *)
 val nth_child_exn : node -> int -> child
 
 val children_array : node -> child array

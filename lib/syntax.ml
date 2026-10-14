@@ -2,15 +2,16 @@
 
    A node cursor pairs a green pointer with position information: parent,
    offset, index_in_parent. [children_mem] is mutable for memoization only. It
-   sits at [None] until first navigated, then holds the materialized array for
-   good. *)
+   sits at the empty array until first navigated, then holds the materialized
+   array for good. A node with no children stays at the empty array, which is
+   also its materialized form. *)
 
 type t =
   { green : Green.node
   ; parent : t option
   ; offset : int
   ; index_in_parent : int
-  ; mutable children_mem : elem array option
+  ; mutable children_mem : elem array
   }
 
 and token_cursor =
@@ -30,7 +31,7 @@ type 'a result =
   }
 
 let of_root g =
-  { green = g; parent = None; offset = 0; index_in_parent = 0; children_mem = None }
+  { green = g; parent = None; offset = 0; index_in_parent = 0; children_mem = [||] }
 ;;
 
 let kind t = Green.kind t.green
@@ -50,60 +51,65 @@ let equal a b = a.offset = b.offset && Green.equal a.green b.green
 
 (* Build the children array on demand. Every later call gets the same array, so
    navigation is stable. One left to right sweep does it, since each child's
-   offset is the running sum of the text lengths before it; the offsets stay in
-   a ref and each child is read from the green node once. [Array.init] leaves
+   offset is the running sum of the text lengths before it. [Array.init] leaves
    its evaluation order unspecified and the running offset depends on one, hence
    the explicit loop.
+
+   Allocation is the cursors themselves and the array. The siblings share one
+   [Some parent_cursor], and [elem_of] is a top-level function rather than a
+   closure over the loop, so neither the closure nor the offset's ref is
+   allocated.
 
    This memo is why a cursor tree belongs to one domain. Two domains navigating
    the same tree would each build an array and one write would win, so the
    [parent <-> child] round-trip stops holding. No lock here: [of_root] is O(1),
    so a second domain gets its own cursor tree over the same green root for the
    price of a record. *)
+let elem_of parent_cursor parent c i child_off =
+  match c with
+  | Green.Node cg ->
+    Node
+      { green = cg; parent; offset = child_off; index_in_parent = i; children_mem = [||] }
+  | Green.Token t ->
+    Token
+      { tc_green = t
+      ; tc_parent = parent_cursor
+      ; tc_offset = child_off
+      ; tc_index_in_parent = i
+      }
+;;
+
 let materialize_children parent_cursor =
   let g = parent_cursor.green in
   let n = Green.num_children g in
   if n = 0
   then [||]
   else (
-    let off = ref parent_cursor.offset in
-    let elem_of i =
-      let c = Green.nth_child_exn g i in
-      let child_off = !off in
-      off := child_off + Green.child_text_len c;
-      match c with
-      | Green.Node cg ->
-        Node
-          { green = cg
-          ; parent = Some parent_cursor
-          ; offset = child_off
-          ; index_in_parent = i
-          ; children_mem = None
-          }
-      | Green.Token t ->
-        Token
-          { tc_green = t
-          ; tc_parent = parent_cursor
-          ; tc_offset = child_off
-          ; tc_index_in_parent = i
-          }
-    in
+    let parent = Some parent_cursor in
+    let c0 = Green.nth_child_exn g 0 in
     (* Seeded with child 0 to give [Array.make] an element; the loop then runs
-       strictly left to right, as [off] requires. *)
-    let out = Array.make n (elem_of 0) in
+       strictly left to right, as the running offset requires. *)
+    let out = Array.make n (elem_of parent_cursor parent c0 0 parent_cursor.offset) in
+    let off = ref (parent_cursor.offset + Green.child_text_len c0) in
     for i = 1 to n - 1 do
-      out.(i) <- elem_of i
+      let c = Green.nth_child_exn g i in
+      out.(i) <- elem_of parent_cursor parent c i !off;
+      off := !off + Green.child_text_len c
     done;
     out)
 ;;
 
+(* A materialized array is never empty, so the empty array means not built
+   yet. A childless node rebuilds its empty array on every call, which costs a
+   read of the green node and no allocation. *)
 let ensure_children t =
-  match t.children_mem with
-  | Some c -> c
-  | None ->
+  let c = t.children_mem in
+  if Array.length c > 0
+  then c
+  else (
     let c = materialize_children t in
-    t.children_mem <- Some c;
-    c
+    t.children_mem <- c;
+    c)
 ;;
 
 (* Copy. Without it the caller holds the memo itself, and reordering or editing
@@ -118,6 +124,12 @@ let nth_child t i =
   if i < 0 || i >= Array.length cs then None else Some cs.(i)
 ;;
 
+(* Reads the green node, so asking how many children there are does not build
+   their cursors. *)
+let num_children t = Green.num_children t.green
+
+(* The array's own bounds check raises [Invalid_argument] out of range. *)
+let nth_child_exn t i = (ensure_children t).(i)
 let to_source t = Green.to_source t.green
 let pp ppf t = Green.pp ppf t.green
 

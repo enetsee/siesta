@@ -219,6 +219,11 @@ module Green : sig
   (** [nth_child n i] is the [i]th child, or [None] if [i] is out of range. O(1). *)
   val nth_child : node -> int -> child option
 
+  (** [nth_child_exn n i] is the [i]th child, without the option. It allocates
+      nothing, so it suits a loop already bounded by {!num_children}. O(1).
+      Raises [Invalid_argument] if [i] is out of range. *)
+  val nth_child_exn : node -> int -> child
+
   (** [children_array n] is a fresh copy of the children array, safe to
       mutate. *)
   val children_array : node -> child array
@@ -470,6 +475,18 @@ module Syntax : sig
   val children_array : t -> elem array
 
   val nth_child : t -> int -> elem option
+
+  (** [num_children t] is the number of [t]'s children. It reads the green
+      node, so it does not build the children's cursors. *)
+  val num_children : t -> int
+
+  (** [nth_child_exn t i] is the [i]th child, without the option. The first
+      call on [t] builds cursors for all of [t]'s children, as {!nth_child}
+      does; after that it allocates nothing. The result is physically equal to
+      the one {!nth_child} wraps. Raises [Invalid_argument] if [i] is out of
+      range. *)
+  val nth_child_exn : t -> int -> elem
+
   val to_source : t -> string
   val pp : Format.formatter -> t -> unit
 

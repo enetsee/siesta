@@ -25,6 +25,8 @@ val equal : t -> t -> bool
 val same_tree : t -> t -> bool
 val children_array : t -> elem array
 val nth_child : t -> int -> elem option
+val num_children : t -> int
+val nth_child_exn : t -> int -> elem
 val to_source : t -> string
 val pp : Format.formatter -> t -> unit
 val elem_kind : elem -> int

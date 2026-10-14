@@ -409,6 +409,47 @@ let prop_parent_child_roundtrip =
           | Some (Syntax.Token _) | None -> false))
 ;;
 
+(* -- unchecked child access ------------------------------------------------- *)
+
+(* [num_children] and [nth_child_exn] agree with [children_array] and
+   [nth_child] at every node: same count, the very same elements, and
+   [Invalid_argument] just past either end. *)
+
+let rec nth_child_exn_agrees cursor =
+  let n = Syntax.num_children cursor in
+  let raises i =
+    match Syntax.nth_child_exn cursor i with
+    | _ -> false
+    | exception Invalid_argument _ -> true
+  in
+  n = Array.length (Syntax.children_array cursor)
+  && raises n
+  && raises (-1)
+  && List.for_all
+       (fun i ->
+          let e = Syntax.nth_child_exn cursor i in
+          (match Syntax.nth_child cursor i with
+           | Some e' -> e == e'
+           | None -> false)
+          &&
+          match e with
+          | Syntax.Node c -> nth_child_exn_agrees c
+          | Syntax.Token _ -> true)
+       (List.init n Fun.id)
+;;
+
+let prop_nth_child_exn_agrees =
+  Test.make
+    ~name:"num_children and nth_child_exn agree with nth_child"
+    ~count:500
+    ~print:print_shape
+    gen_root
+    (fun shape ->
+       let cache = Cache.create () in
+       let root = build_via_builder cache shape in
+       nth_child_exn_agrees (Syntax.of_root root))
+;;
+
 (* -- idempotent replace ---------------------------------------------------- *)
 
 (* Replacing a node with its own green rebuilds the spine out of children
@@ -897,6 +938,7 @@ let () =
     ; ( "navigation"
       , [ Helpers.qcheck prop_parent_child_roundtrip
         ; Helpers.qcheck prop_token_parent_roundtrip
+        ; Helpers.qcheck prop_nth_child_exn_agrees
         ; Helpers.qcheck prop_same_tree
         ; Helpers.qcheck prop_ptr_separates_occurrences
         ] )
