@@ -51,11 +51,25 @@ let create_synchronized ?(capacity = default_capacity) () =
 
 let create_plain () = Plain
 
+(* The intern paths below spell out [Mutex.protect] rather than call it, because
+   its closure over the arguments is an allocation per intern. This is its
+   exception path: the backtrace is read before the unlock can disturb it. *)
+let unlock_and_reraise lock e =
+  let bt = Printexc.get_raw_backtrace () in
+  Mutex.unlock lock;
+  Printexc.raise_with_backtrace e bt
+;;
+
 let hashcons_token (t : t) ~kind ~text : Dedup.token =
   match t with
   | Hashconsed { tokens; _ } -> Dedup.token_intern tokens ~kind ~text
   | Synchronized { lock; tokens; _ } ->
-    Mutex.protect lock (fun () -> Dedup.token_intern tokens ~kind ~text)
+    Mutex.lock lock;
+    (match Dedup.token_intern tokens ~kind ~text with
+     | tok ->
+       Mutex.unlock lock;
+       tok
+     | exception e -> unlock_and_reraise lock e)
   | Plain -> Dedup.{ tk_tag = fresh_tag (); tk_kind = kind; tk_text = text }
 ;;
 
@@ -66,7 +80,12 @@ let hashcons_token_slice (t : t) ~kind ~src ~pos ~len : Dedup.token =
   match t with
   | Hashconsed { tokens; _ } -> Dedup.token_intern_slice tokens ~kind ~src ~pos ~len
   | Synchronized { lock; tokens; _ } ->
-    Mutex.protect lock (fun () -> Dedup.token_intern_slice tokens ~kind ~src ~pos ~len)
+    Mutex.lock lock;
+    (match Dedup.token_intern_slice tokens ~kind ~src ~pos ~len with
+     | tok ->
+       Mutex.unlock lock;
+       tok
+     | exception e -> unlock_and_reraise lock e)
   | Plain ->
     Dedup.{ tk_tag = fresh_tag (); tk_kind = kind; tk_text = String.sub src pos len }
 ;;
@@ -77,8 +96,12 @@ let hashcons_node (t : t) ~kind ~text_len ~payload (children : Dedup.child array
   match t with
   | Hashconsed { nodes; _ } -> Dedup.node_intern nodes ~kind ~text_len ~payload children
   | Synchronized { lock; nodes; _ } ->
-    Mutex.protect lock (fun () ->
-      Dedup.node_intern nodes ~kind ~text_len ~payload children)
+    Mutex.lock lock;
+    (match Dedup.node_intern nodes ~kind ~text_len ~payload children with
+     | nd ->
+       Mutex.unlock lock;
+       nd
+     | exception e -> unlock_and_reraise lock e)
   | Plain ->
     (* Copy for the reason the miss path in [Dedup.node_intern] does. Plain
        skips the buckets, so a stranded entry is beyond it, and [nd_text_len]
