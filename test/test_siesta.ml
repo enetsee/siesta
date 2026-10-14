@@ -451,6 +451,24 @@ let test_checkpoint_rejected_after_frame_closes () =
   | Failure _ -> ()
 ;;
 
+(* A sibling opened at the same depth reuses the closed frame's record, so only
+   the frame's [gen] tells the two apart. *)
+let test_checkpoint_rejected_in_reopened_sibling () =
+  let b = Builder.create () in
+  Builder.start_node b K.root;
+  Builder.start_node b K.bin_expr;
+  let cp = Builder.checkpoint b in
+  Builder.token b K.int_lit "1";
+  Builder.finish_node b;
+  Builder.start_node b K.bin_expr;
+  (* a new frame at the depth [cp] was taken at *)
+  try
+    Builder.start_node_at b cp K.bin_expr;
+    Alcotest.fail "checkpoint from a closed sibling must be rejected"
+  with
+  | Failure _ -> ()
+;;
+
 let test_checkpoint_rejected_when_buried () =
   let b = Builder.create () in
   Builder.start_node b K.root;
@@ -1253,6 +1271,10 @@ let () =
             "checkpoint rejected after frame closes"
             `Quick
             test_checkpoint_rejected_after_frame_closes
+        ; Alcotest.test_case
+            "checkpoint rejected in a reopened sibling"
+            `Quick
+            test_checkpoint_rejected_in_reopened_sibling
         ; Alcotest.test_case
             "checkpoint rejected when buried"
             `Quick

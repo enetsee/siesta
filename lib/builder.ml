@@ -35,11 +35,16 @@ type start_at =
   ; sa_stamp : int
   }
 
+(* Mutable so a record can be reused: the frames live in [t.frames] and a push
+   overwrites the record at that depth, so an open node allocates nothing once
+   the stack has been that deep before. Nothing outside the builder holds a
+   frame, and a checkpoint names its frame by [gen], which every push draws
+   fresh, so a reused record cannot be mistaken for the frame it replaced. *)
 type frame =
-  { kind : int
-  ; payload : int
-  ; gen : int
-  ; children_start : int
+  { mutable kind : int
+  ; mutable payload : int
+  ; mutable gen : int
+  ; mutable children_start : int
   ; mutable start_ats : start_at list
     (* Newest first, empty until [start_node_at] has run on this frame at all.
        Pruned on insert so positions decrease strictly towards the tail; see
@@ -48,7 +53,8 @@ type frame =
   }
 
 type t =
-  { mutable stack : frame list
+  { mutable frames : frame array
+  ; mutable depth : int (* open frames are [frames.(0)] to [frames.(depth - 1)] *)
   ; mutable root : Green.node option
   ; mutable clock : int
   ; id : int
@@ -64,7 +70,14 @@ let create ?cache ?(initial_children_capacity = 64) () =
   in
   let children = Dynarray.create () in
   Dynarray.ensure_capacity children initial_children_capacity;
-  { stack = []; root = None; clock = 0; id = fresh_builder_id (); cache; children }
+  { frames = [||]
+  ; depth = 0
+  ; root = None
+  ; clock = 0
+  ; id = fresh_builder_id ()
+  ; cache
+  ; children
+  }
 ;;
 
 let cache t = t.cache
@@ -78,34 +91,51 @@ let tick t =
   c
 ;;
 
+let new_frame () = { kind = 0; payload = 0; gen = 0; children_start = 0; start_ats = [] }
+
+(* Doubles, filling the new slots with fresh records so every slot below the
+   length always holds one to reuse. *)
+let grow_frames t =
+  let old = t.frames in
+  let n = Array.length old in
+  let n' = if n = 0 then 16 else 2 * n in
+  t.frames <- Array.init n' (fun i -> if i < n then old.(i) else new_frame ())
+;;
+
+let push_frame t ~kind ~payload ~children_start =
+  if t.depth = Array.length t.frames then grow_frames t;
+  let f = t.frames.(t.depth) in
+  f.kind <- kind;
+  f.payload <- payload;
+  f.gen <- tick t;
+  f.children_start <- children_start;
+  f.start_ats <- [];
+  t.depth <- t.depth + 1
+;;
+
 let start_node t ?(payload = 0) kind =
   if Option.is_some t.root then failwith "Builder.start_node: tree already finished";
-  let gen = tick t in
-  t.stack
-  <- { kind; payload; gen; children_start = Dynarray.length t.children; start_ats = [] }
-     :: t.stack
+  push_frame t ~kind ~payload ~children_start:(Dynarray.length t.children)
 ;;
 
 let token t kind text =
-  match t.stack with
-  | _ :: _ ->
+  if t.depth > 0
+  then (
     let tok = Green.mk_token t.cache ~kind ~text in
-    Dynarray.add_last t.children (Green.Token tok)
-  | [] ->
-    if Option.is_some t.root
-    then failwith "Builder.token: tree already finished"
-    else failwith "Builder.token: no node started"
+    Dynarray.add_last t.children (Green.Token tok))
+  else if Option.is_some t.root
+  then failwith "Builder.token: tree already finished"
+  else failwith "Builder.token: no node started"
 ;;
 
 let token_slice t kind src pos len =
-  match t.stack with
-  | _ :: _ ->
+  if t.depth > 0
+  then (
     let tok = Green.mk_token_slice t.cache ~kind ~src ~pos ~len in
-    Dynarray.add_last t.children (Green.Token tok)
-  | [] ->
-    if Option.is_some t.root
-    then failwith "Builder.token_slice: tree already finished"
-    else failwith "Builder.token_slice: no node started"
+    Dynarray.add_last t.children (Green.Token tok))
+  else if Option.is_some t.root
+  then failwith "Builder.token_slice: tree already finished"
+  else failwith "Builder.token_slice: no node started"
 ;;
 
 (* Lift a closing frame's children off the shared buffer as an array of their
@@ -124,41 +154,41 @@ let pop_children_array t (children_start : int) : Green.child array =
 ;;
 
 let finish_node t =
-  match t.stack with
-  | top :: rest ->
+  if t.depth > 0
+  then (
+    let top = t.frames.(t.depth - 1) in
     let children = pop_children_array t top.children_start in
     let node = Green.mk_node t.cache ~kind:top.kind ~payload:top.payload ~children () in
-    t.stack <- rest;
-    (match rest with
-     | _ :: _ -> Dynarray.add_last t.children (Green.Node node)
-     | [] -> t.root <- Some node)
-  | [] ->
-    if Option.is_some t.root
-    then failwith "Builder.finish_node: tree already finished"
-    else failwith "Builder.finish_node: no node started"
+    t.depth <- t.depth - 1;
+    if t.depth > 0
+    then Dynarray.add_last t.children (Green.Node node)
+    else t.root <- Some node)
+  else if Option.is_some t.root
+  then failwith "Builder.finish_node: tree already finished"
+  else failwith "Builder.finish_node: no node started"
 ;;
 
 let finish t =
-  match t.stack with
-  | [] ->
-    (match t.root with
-     | Some r -> r
-     | None -> failwith "Builder.finish: nothing built")
-  | _ :: _ -> failwith "Builder.finish: unbalanced start/finish"
+  if t.depth > 0
+  then failwith "Builder.finish: unbalanced start/finish"
+  else (
+    match t.root with
+    | Some r -> r
+    | None -> failwith "Builder.finish: nothing built")
 ;;
 
 (* -- checkpoints ----------------------------------------------------------- *)
 
 let checkpoint t =
-  match t.stack with
-  | top :: _ ->
+  if t.depth > 0
+  then
     (* [pos] is the same [children_start] a frame opened here would carry. *)
     { builder_id = t.id
-    ; frame_gen = top.gen
+    ; frame_gen = t.frames.(t.depth - 1).gen
     ; pos = Dynarray.length t.children
     ; stamp = tick t
     }
-  | [] -> failwith "Builder.checkpoint: no open node"
+  else failwith "Builder.checkpoint: no open node"
 ;;
 
 (* [cp] addresses the children from [cp.pos] onwards. A [start_node_at] at [p]
@@ -195,28 +225,28 @@ let record_start_at top (sa : start_at) =
 let start_node_at t ?(payload = 0) (cp : checkpoint) kind =
   if cp.builder_id <> t.id
   then failwith "Builder.start_node_at: checkpoint is from another builder";
-  match t.stack with
-  | [] -> failwith "Builder.start_node_at: no open node"
-  | top :: _ when top.gen <> cp.frame_gen ->
-    failwith "Builder.start_node_at: checkpoint is not from the open frame"
-  | top :: _ when stranded top.start_ats cp ->
+  if t.depth = 0 then failwith "Builder.start_node_at: no open node";
+  let top = t.frames.(t.depth - 1) in
+  if top.gen <> cp.frame_gen
+  then failwith "Builder.start_node_at: checkpoint is not from the open frame";
+  if stranded top.start_ats cp
+  then
     (* An earlier [start_node_at] left of [cp.pos] ran after [cp] was taken, so
        the children [cp] addressed are inside that node now and [cp.pos]
        addresses whatever has landed there since. Rejected, in place of wrapping
        the wrong span. *)
-    failwith "Builder.start_node_at: checkpoint position is stale"
-  | _ :: _ when cp.pos > Dynarray.length t.children ->
+    failwith "Builder.start_node_at: checkpoint position is stale";
+  if cp.pos > Dynarray.length t.children
+  then
     (* Subsumed by the check above: the buffer shrinks only through
        [start_node_at], and a call that leaves it shorter than [cp.pos] started
        left of [cp.pos] and so stranded [cp]. Kept as a backstop, holding
        [children_start] inside the buffer if that bookkeeping ever goes
        wrong. *)
-    failwith "Builder.start_node_at: checkpoint position is stale"
-  | top :: _ ->
-    (* The children to be wrapped already sit at [cp.pos] onwards, so the new
-       frame claims them just by starting there. The outer frame keeps its
-       own [children_start] and picks up again once this one closes. *)
-    record_start_at top { sa_pos = cp.pos; sa_stamp = tick t };
-    let gen = tick t in
-    t.stack <- { kind; payload; gen; children_start = cp.pos; start_ats = [] } :: t.stack
+    failwith "Builder.start_node_at: checkpoint position is stale";
+  (* The children to be wrapped already sit at [cp.pos] onwards, so the new
+     frame claims them just by starting there. The outer frame keeps its own
+     [children_start] and picks up again once this one closes. *)
+  record_start_at top { sa_pos = cp.pos; sa_stamp = tick t };
+  push_frame t ~kind ~payload ~children_start:cp.pos
 ;;
