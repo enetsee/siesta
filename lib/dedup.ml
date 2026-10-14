@@ -112,16 +112,22 @@ let[@inline] slice_equal (text : string) (src : string) pos len =
   !same
 ;;
 
-let node_hash ~kind ~text_len ~payload children =
+(* Over [children.(pos)] to [children.(pos + len - 1)], so the builder can hash
+   a node's children where they lie in its buffer. *)
+let node_hash_sub ~kind ~text_len ~payload children pos len =
   let acc = ref (mix (mix (mix 0 kind) text_len) payload) in
-  for i = 0 to Array.length children - 1 do
+  for i = pos to pos + len - 1 do
     acc := mix !acc (child_key children.(i))
   done;
   (* With children the loop has already avalanched [payload]. Childless, it is
      the last word mixed and needs [final], or payloads carrying their entropy
      in the high bits all pile into one bucket. See the "childless payload high
      bits" case in test_dedup.ml. *)
-  if Array.length children = 0 then final !acc else !acc
+  if len = 0 then final !acc else !acc
+;;
+
+let node_hash ~kind ~text_len ~payload children =
+  node_hash_sub ~kind ~text_len ~payload children 0 (Array.length children)
 ;;
 
 (* ---- generic weak-bucket table ------------------------------------------- *)
@@ -334,31 +340,42 @@ let node_create ?(capacity = 256) () : node_t = make_table capacity
 let node_clear (t : node_t) = clear_table t
 let node_stats (t : node_t) = table_stats t
 
-(* Structural child equality, by tag and discriminator; see [child_key]. *)
-let same_children (a : child array) (b : child array) =
-  let n = Array.length a in
-  Array.length b = n
+(* Structural child equality, by tag and discriminator, between [a] and the
+   range [b.(pos)] to [b.(pos + len - 1)]; see [child_key]. *)
+let same_children (a : child array) (b : child array) pos len =
+  Array.length a = len
   &&
   let ok = ref true in
   let i = ref 0 in
-  while !ok && !i < n do
-    if child_key a.(!i) <> child_key b.(!i) then ok := false;
+  while !ok && !i < len do
+    if child_key a.(!i) <> child_key b.(pos + !i) then ok := false;
     incr i
   done;
   !ok
 ;;
 
-let node_matches (e : node) ~kind ~text_len ~payload children =
+let node_matches (e : node) ~kind ~text_len ~payload children pos len =
   e.nd_kind = kind
   && e.nd_text_len = text_len
   && e.nd_payload = payload
-  && same_children e.nd_children children
+  && same_children e.nd_children children pos len
 ;;
 
-(* Probes as [token_intern] does, and for the same reason. *)
-let node_intern (t : node_t) ~kind ~text_len ~payload (children : child array) : node =
+(* Probes as [token_intern] does, and for the same reason. The children are a
+   range of [children], so a hit reads them where they lie and allocates no
+   array; [node_intern] is the whole-array case. *)
+let node_intern_sub
+      (t : node_t)
+      ~kind
+      ~text_len
+      ~payload
+      (children : child array)
+      ~pos
+      ~len
+  : node
+  =
   let n = Array.length t.buckets in
-  let i = bucket_index (node_hash ~kind ~text_len ~payload children) n in
+  let i = bucket_index (node_hash_sub ~kind ~text_len ~payload children pos len) n in
   let b = t.buckets.(i) in
   let cap = Weak.length b in
   let found = ref None in
@@ -366,7 +383,7 @@ let node_intern (t : node_t) ~kind ~text_len ~payload (children : child array) :
   let j = ref 0 in
   while !searching && !j < cap do
     match Weak.get b !j with
-    | Some e as hit when node_matches e ~kind ~text_len ~payload children ->
+    | Some e as hit when node_matches e ~kind ~text_len ~payload children pos len ->
       found := hit;
       searching := false
     | _ -> incr j
@@ -378,12 +395,13 @@ let node_intern (t : node_t) ~kind ~text_len ~payload (children : child array) :
        later write to it corrupts the node silently; [nd_text_len] stops
        matching the children, and the entry sits in a bucket its hash no longer
        indexes, so the shape is lost to every future intern. The cost falls on
-       the miss path, which is allocating a record anyway. *)
+       the miss path, which is allocating a record anyway, and cutting the
+       range out is the copy. *)
     let e =
       { nd_tag = fresh_tag ()
       ; nd_kind = kind
       ; nd_text_len = text_len
-      ; nd_children = Array.copy children
+      ; nd_children = Array.sub children pos len
       ; nd_payload = payload
       }
     in
@@ -400,4 +418,8 @@ let node_intern (t : node_t) ~kind ~text_len ~payload (children : child array) :
              v.nd_children)
           m);
     e
+;;
+
+let node_intern t ~kind ~text_len ~payload children =
+  node_intern_sub t ~kind ~text_len ~payload children ~pos:0 ~len:(Array.length children)
 ;;

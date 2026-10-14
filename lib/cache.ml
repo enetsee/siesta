@@ -90,14 +90,22 @@ let hashcons_token_slice (t : t) ~kind ~src ~pos ~len : Dedup.token =
     Dedup.{ tk_tag = fresh_tag (); tk_kind = kind; tk_text = String.sub src pos len }
 ;;
 
-let hashcons_node (t : t) ~kind ~text_len ~payload (children : Dedup.child array)
+let hashcons_node
+      (t : t)
+      ~kind
+      ~text_len
+      ~payload
+      (children : Dedup.child array)
+      ~pos
+      ~len
   : Dedup.node
   =
   match t with
-  | Hashconsed { nodes; _ } -> Dedup.node_intern nodes ~kind ~text_len ~payload children
+  | Hashconsed { nodes; _ } ->
+    Dedup.node_intern_sub nodes ~kind ~text_len ~payload children ~pos ~len
   | Synchronized { lock; nodes; _ } ->
     Mutex.lock lock;
-    (match Dedup.node_intern nodes ~kind ~text_len ~payload children with
+    (match Dedup.node_intern_sub nodes ~kind ~text_len ~payload children ~pos ~len with
      | nd ->
        Mutex.unlock lock;
        nd
@@ -110,7 +118,7 @@ let hashcons_node (t : t) ~kind ~text_len ~payload (children : Dedup.child array
       { nd_tag = fresh_tag ()
       ; nd_kind = kind
       ; nd_text_len = text_len
-      ; nd_children = Array.copy children
+      ; nd_children = Array.sub children pos len
       ; nd_payload = payload
       }
 ;;

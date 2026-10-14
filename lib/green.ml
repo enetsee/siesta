@@ -49,9 +49,16 @@ let mk_token_slice cache ~kind ~src ~pos ~len =
   Cache.hashcons_token_slice cache ~kind ~src ~pos ~len
 ;;
 
+let mk_node_sub cache ~kind ~payload children ~pos ~len =
+  let text_len = ref 0 in
+  for i = pos to pos + len - 1 do
+    text_len := !text_len + child_text_len children.(i)
+  done;
+  Cache.hashcons_node cache ~kind ~text_len:!text_len ~payload children ~pos ~len
+;;
+
 let mk_node cache ~kind ?(payload = 0) ~children () =
-  let text_len = sum_text_len children in
-  Cache.hashcons_node cache ~kind ~text_len ~payload children
+  mk_node_sub cache ~kind ~payload children ~pos:0 ~len:(Array.length children)
 ;;
 
 let to_source (root : node) =

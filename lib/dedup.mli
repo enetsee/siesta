@@ -32,6 +32,20 @@ type node_t
 
 val node_create : ?capacity:int -> unit -> node_t
 val node_intern : node_t -> kind:int -> text_len:int -> payload:int -> child array -> node
+
+(** [node_intern] over the children [children.(pos)] to
+    [children.(pos + len - 1)]. A hit allocates no array; a miss copies the
+    range out. Not re-exported by {!Siesta.Dedup}. *)
+val node_intern_sub
+  :  node_t
+  -> kind:int
+  -> text_len:int
+  -> payload:int
+  -> child array
+  -> pos:int
+  -> len:int
+  -> node
+
 val node_clear : node_t -> unit
 val fresh_tag : unit -> int
 val token_stats : token_t -> int * int * int * int * int * int

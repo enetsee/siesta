@@ -25,13 +25,17 @@ val hashcons_token_slice
   -> Dedup.token
 
 (** Not re-exported by {!Siesta.Cache}. Splits on Hashconsed and Plain exactly
-    as {!hashcons_token} does. Public callers go through {!Green.mk_node}. *)
+    as {!hashcons_token} does. The children are [children.(pos)] to
+    [children.(pos + len - 1)], copied out only when a new node is made. Public
+    callers go through {!Green.mk_node}. *)
 val hashcons_node
   :  t
   -> kind:int
   -> text_len:int
   -> payload:int
   -> Dedup.child array
+  -> pos:int
+  -> len:int
   -> Dedup.node
 
 val clear : t -> unit

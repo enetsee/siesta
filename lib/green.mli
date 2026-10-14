@@ -34,6 +34,19 @@ end
 val mk_token : Cache.t -> kind:int -> text:string -> token
 val mk_token_slice : Cache.t -> kind:int -> src:string -> pos:int -> len:int -> token
 val mk_node : Cache.t -> kind:int -> ?payload:int -> children:child array -> unit -> node
+
+(** [mk_node] over [children.(pos)] to [children.(pos + len - 1)], for the
+    builder, which holds a node's children in a range of its buffer. Not
+    re-exported by {!Siesta.Green}. *)
+val mk_node_sub
+  :  Cache.t
+  -> kind:int
+  -> payload:int
+  -> child array
+  -> pos:int
+  -> len:int
+  -> node
+
 val child_text_len : child -> int
 val sum_text_len : child array -> int
 val to_source : node -> string

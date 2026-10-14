@@ -59,8 +59,21 @@ type t =
   ; mutable clock : int
   ; id : int
   ; cache : Cache.t
-  ; children : Green.child Dynarray.t
+  ; mutable buf : Green.child array
+  ; mutable len : int
+    (* The open frames' children, [buf.(0)] to [buf.(len - 1)]. A plain array
+       rather than a [Dynarray] so [finish_node] can intern a node's children
+       where they lie, as a range, and build an array only when the node is
+       new. Slots from [len] up hold [filler] or a child already popped. A
+       popped child is not cleared: it went into the node its range became,
+       which is in the buffer or is the root, so the slot keeps alive nothing
+       the builder does not already hold. *)
   }
+
+(* What a slot of [buf] holds before anything is pushed there, since
+   [Array.make] needs an element. Interned through a throwaway [Plain] cache, so
+   no table holds it. *)
+let filler = Green.Token (Green.mk_token (Cache.create_plain ()) ~kind:(-1) ~text:"")
 
 let create ?cache ?(initial_children_capacity = 64) () =
   let cache =
@@ -68,15 +81,14 @@ let create ?cache ?(initial_children_capacity = 64) () =
     | Some c -> c
     | None -> Cache.create ()
   in
-  let children = Dynarray.create () in
-  Dynarray.ensure_capacity children initial_children_capacity;
   { frames = [||]
   ; depth = 0
   ; root = None
   ; clock = 0
   ; id = fresh_builder_id ()
   ; cache
-  ; children
+  ; buf = Array.make (max initial_children_capacity 0) filler
+  ; len = 0
   }
 ;;
 
@@ -113,16 +125,27 @@ let push_frame t ~kind ~payload ~children_start =
   t.depth <- t.depth + 1
 ;;
 
+let push_child t c =
+  let n = Array.length t.buf in
+  if t.len = n
+  then (
+    let buf' = Array.make (if n = 0 then 16 else 2 * n) filler in
+    Array.blit t.buf 0 buf' 0 n;
+    t.buf <- buf');
+  t.buf.(t.len) <- c;
+  t.len <- t.len + 1
+;;
+
 let start_node t ?(payload = 0) kind =
   if Option.is_some t.root then failwith "Builder.start_node: tree already finished";
-  push_frame t ~kind ~payload ~children_start:(Dynarray.length t.children)
+  push_frame t ~kind ~payload ~children_start:t.len
 ;;
 
 let token t kind text =
   if t.depth > 0
   then (
     let tok = Green.mk_token t.cache ~kind ~text in
-    Dynarray.add_last t.children (Green.Token tok))
+    push_child t (Green.Token tok))
   else if Option.is_some t.root
   then failwith "Builder.token: tree already finished"
   else failwith "Builder.token: no node started"
@@ -132,37 +155,33 @@ let token_slice t kind src pos len =
   if t.depth > 0
   then (
     let tok = Green.mk_token_slice t.cache ~kind ~src ~pos ~len in
-    Dynarray.add_last t.children (Green.Token tok))
+    push_child t (Green.Token tok))
   else if Option.is_some t.root
   then failwith "Builder.token_slice: tree already finished"
   else failwith "Builder.token_slice: no node started"
-;;
-
-(* Lift a closing frame's children off the shared buffer as an array of their
-   own, ready for a green node. *)
-let pop_children_array t (children_start : int) : Green.child array =
-  let len = Dynarray.length t.children - children_start in
-  if len <= 0
-  then [||]
-  else (
-    let arr = Array.make len (Dynarray.get t.children children_start) in
-    for i = 1 to len - 1 do
-      arr.(i) <- Dynarray.get t.children (children_start + i)
-    done;
-    Dynarray.truncate t.children children_start;
-    arr)
 ;;
 
 let finish_node t =
   if t.depth > 0
   then (
     let top = t.frames.(t.depth - 1) in
-    let children = pop_children_array t top.children_start in
-    let node = Green.mk_node t.cache ~kind:top.kind ~payload:top.payload ~children () in
+    let start = top.children_start in
+    let n = t.len - start in
+    (* Interned from the buffer, so a hit allocates no children array and a
+       miss copies the range out once. [n] is never negative: a frame opens at
+       or below [len], and [len] only drops back to the top frame's start. *)
+    let node =
+      Green.mk_node_sub
+        t.cache
+        ~kind:top.kind
+        ~payload:top.payload
+        t.buf
+        ~pos:start
+        ~len:n
+    in
+    t.len <- start;
     t.depth <- t.depth - 1;
-    if t.depth > 0
-    then Dynarray.add_last t.children (Green.Node node)
-    else t.root <- Some node)
+    if t.depth > 0 then push_child t (Green.Node node) else t.root <- Some node)
   else if Option.is_some t.root
   then failwith "Builder.finish_node: tree already finished"
   else failwith "Builder.finish_node: no node started"
@@ -185,7 +204,7 @@ let checkpoint t =
     (* [pos] is the same [children_start] a frame opened here would carry. *)
     { builder_id = t.id
     ; frame_gen = t.frames.(t.depth - 1).gen
-    ; pos = Dynarray.length t.children
+    ; pos = t.len
     ; stamp = tick t
     }
   else failwith "Builder.checkpoint: no open node"
@@ -236,7 +255,7 @@ let start_node_at t ?(payload = 0) (cp : checkpoint) kind =
        addresses whatever has landed there since. Rejected, in place of wrapping
        the wrong span. *)
     failwith "Builder.start_node_at: checkpoint position is stale";
-  if cp.pos > Dynarray.length t.children
+  if cp.pos > t.len
   then
     (* Subsumed by the check above: the buffer shrinks only through
        [start_node_at], and a call that leaves it shorter than [cp.pos] started
